@@ -106,7 +106,9 @@ def _read(path: Path) -> dict:
 
 
 def _write(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _tick_jobs(root: Path, ws: str | None = None, states: set[str] | None = None) -> list[str]:
@@ -607,7 +609,7 @@ def post_now(job_id: str, *, anyway: bool = False, approval: dict | None = None,
             _publish(state, legs, conn, root, now, report)
         finally:
             conn.close()
-        _write(root / "tick_state.json", {**rest, **state})  # the record goes once every leg landed; else it waits
+            _write(root / "tick_state.json", {**rest, **state})  # persist leg progress even if interrupted
         return {"published": report["publish"].get("youtube") == "published", "publish": report["publish"],
                 "capped": False}
 

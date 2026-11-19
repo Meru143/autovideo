@@ -36,12 +36,17 @@ class Dropped(RuntimeError):
     """A post refused: the video was dropped before its step that can't be undone (posting)."""
 
 
-def _db(root: Path) -> sqlite3.Connection:
+@contextlib.contextmanager
+def _db(root: Path):
     root.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(root / "factory.db", timeout=30)
-    conn.execute("create table if not exists jobs (id text primary key, workspace text not null, state text not null,"
-                 " stage text, regenerations integer not null default 0, created_at real, updated_at real)")
-    return conn
+    try:
+        with conn:
+            conn.execute("create table if not exists jobs (id text primary key, workspace text not null, state text not null,"
+                         " stage text, regenerations integer not null default 0, created_at real, updated_at real)")
+            yield conn
+    finally:
+        conn.close()
 
 
 @dataclass

@@ -205,9 +205,9 @@ def videos(root: Path, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     cards, since = _cards(root, now), (now - ON_AIR).astimezone(timezone.utc).isoformat()  # ISO UTC sorts as time
     col = {k: [c for c in cards if c["column"] == k] for k in ("making", "ready", "live")}
-    col["ready"].sort(key=lambda c: (c["slot"] is None, c["slot"] and c["slot"]["at"]))
+    col["ready"].sort(key=lambda c: (c["slot"] is None, (c["slot"] or {}).get("at") or ""))
     col["live"] = sorted((c for c in col["live"] if (c["posted"]["at"] or "") >= since),
-                         key=lambda c: c["posted"]["at"], reverse=True)
+                         key=lambda c: c["posted"]["at"] or "", reverse=True)
     return {"videos": col["making"] + col["ready"] + col["live"]}
 
 
@@ -257,8 +257,11 @@ def video(root: Path, jid: str, now: datetime | None = None) -> dict | None:
         row = c.execute("select workspace, state, updated_at from jobs where id = ?", (jid,)).fetchone()
     if row is None:
         return None
+    ws = _channels().get(row[0])
+    if ws is None:
+        return None
     d, rec = root / "jobs" / jid, _records(root / "jobs" / jid)
-    facts = _facts(root, row[0], _channels()[row[0]], _state(root), now)
+    facts = _facts(root, row[0], ws, _state(root), now)
     card = _card(root, jid, row, rec, facts, _views(root), now, board=False)
     first = next((n for n in facts["stages"] if not (d / f"{n}.done.json").exists()), None)
     now_on = {"attention": "stopped", "making": "current"}.get(card["lamp"], "todo")
@@ -428,7 +431,7 @@ def _last_report(log: Path) -> dict | None:
         try:
             report = json.JSONDecoder().raw_decode(text, m.start())[0]
         except ValueError:
-            return None
+            continue
         if isinstance(report, dict) and report.get("at"):
             return report
     return None

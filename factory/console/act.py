@@ -160,7 +160,7 @@ def _save_settings(name: str, path: Path, changes: dict, repo: Path) -> str:
                 raise Invalid("instagram must be true or false")
             w.setdefault("instagram", {})["enabled"] = v
         elif k == "topics" and isinstance(v, dict) and set(v) <= set(TOPICS):
-            w["topics"].update(v)
+            w.setdefault("topics", {}).update(v)
         else:
             raise Invalid(f"can't change {k!r}: the settings take {', '.join(SCHEDULE)}, instagram and "
                           f"topics ({', '.join(TOPICS)})")
@@ -238,10 +238,17 @@ def _abort_revert(repo: Path, sha: str) -> None:
 
 
 def _loads(repo: Path, files: list[str]) -> str | None:
-    """The loader's refusal of a channel's settings.json among `files` (repo paths), as they are now; None when every
-    one loads."""
+    """The loader's refusal of a channel's settings.json or factory/settings.json among `files` (repo paths), as they
+    are now; None when every one loads."""
     top = read._rel(repo, channels_root())
+    factory_rel = read._rel(repo, factory_settings.path())
     for f in files:
+        if f == factory_rel:
+            try:
+                factory_settings.load()
+            except ValueError as e:
+                return str(e)
+            continue
         name = f.removeprefix(top + "/").partition("/")[0]
         if f == f"{top}/{name}/settings.json":
             try:

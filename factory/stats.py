@@ -7,6 +7,7 @@ Studio showed 1,002). The loop's score, later, is averageViewPercentage at day 7
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,10 +71,13 @@ def pull(conn, ws: dict, now: datetime, *, root: Path = OUT, session=None) -> di
     if not due:
         return {"videos": 0, "rows": 0, "missing": [], "private": []}
     sess = session or _session(ws)
-    r = sess.get(VIDEOS, params={"part": "status,statistics", "id": ",".join(sorted(due))}, timeout=60)
-    _ok(r)
-    live = {i["id"]: {col: int(i.get("statistics", {}).get(k) or 0) for k, col in LIVE.items()}
-            for i in r.json().get("items", []) if i.get("status", {}).get("privacyStatus") == "public"}
+    ids, live = sorted(due), {}
+    for off in range(0, len(ids), 50):  # YouTube Data API videos.list accepts at most 50 IDs per request
+        r = sess.get(VIDEOS, params={"part": "status,statistics", "id": ",".join(ids[off:off + 50])}, timeout=60)
+        _ok(r)
+        for i in r.json().get("items", []):
+            if i.get("status", {}).get("privacyStatus") == "public":
+                live[i["id"]] = {col: int(i.get("statistics", {}).get(k) or 0) for k, col in LIVE.items()}
     public = set(live)
     got = []
     for vid in sorted(public, key=lambda v: due[v]):
@@ -127,5 +131,7 @@ def daily(now: datetime | None = None, *, root: Path = OUT, session_for=None) ->
                 out[name] = f"{type(e).__name__}: {str(e)[:200]}"
     finally:
         conn.close()
-    mark.write_text(json.dumps(done), encoding="utf-8")
+    tmp = mark.with_suffix(mark.suffix + ".tmp")
+    tmp.write_text(json.dumps(done), encoding="utf-8")
+    os.replace(tmp, mark)
     return out

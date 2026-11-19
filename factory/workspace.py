@@ -138,7 +138,8 @@ def load(name: str, *, need: tuple[str, ...] = REQUIRED, root: Path | None = Non
             bad(f"format.aspect must be one of {ASPECTS}")
         if fm.get("pipeline", "explainer") not in PIPELINES:
             bad(f"format.pipeline {fm.get('pipeline')!r} must be one of {PIPELINES}")
-        if not (len(length) == 2 and 0 < length[0] < length[1]):
+        if not (isinstance(length, list) and len(length) == 2 and all(type(x) in (int, float) for x in length)
+                and 0 < length[0] < length[1]):
             bad("format.length_s must be [lo, hi] seconds with 0 < lo < hi")
         if extra := sorted(set(fm) - set(FORMAT_DEFAULTS)):  # a typo never falls back to a default silently
             bad(f"format has unknown keys {extra}; it takes {sorted(FORMAT_DEFAULTS)}")
@@ -204,7 +205,7 @@ def load(name: str, *, need: tuple[str, ...] = REQUIRED, root: Path | None = Non
             bad(f'schedule.mode {sc["mode"]!r} must be "private" (the default) or "public"')
     if "topics" in w:  # the topic engine's settings (Plan 3a)
         tp = w["topics"]
-        if not (isinstance(tp.get("min_score", 60), (int, float)) and 0 < tp.get("min_score", 60) <= 100):
+        if not (type(tp.get("min_score", 60)) in (int, float) and 0 < tp.get("min_score", 60) <= 100):
             bad("topics.min_score must be between 1 and 100")
         if not (isinstance(tp.get("levers"), list) and tp["levers"]
                 and all(isinstance(x, str) and x.strip() for x in tp["levers"])):
@@ -217,7 +218,7 @@ def load(name: str, *, need: tuple[str, ...] = REQUIRED, root: Path | None = Non
             bad("music.bpm must be [lo, hi] with 60 <= lo < hi <= 140")
         if not (isinstance(m.get("modes"), list) and m["modes"]):
             bad("music.modes must list the allowed modes")
-        if not (m.get("palette") and isinstance(m.get("version"), int)):
+        if not (m.get("palette") and type(m.get("version")) is int):
             bad("music needs a palette name and an integer version")
         if type(m.get("swell_db", 0)) not in (int, float) or not 0 <= m.get("swell_db", 0) <= 6:
             bad("music.swell_db must be 0-6 dB (the mixer's rise in the gaps)")

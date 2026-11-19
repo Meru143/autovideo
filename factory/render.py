@@ -47,19 +47,20 @@ class _Quiet(http.server.SimpleHTTPRequestHandler):
 
 @contextlib.contextmanager
 def vendor_mirror():
-    """Serve the vendor folder at the npm-mirror root HYPERFRAMES_GSAP_BASE_URL points at (127.0.0.1 only)."""
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", MIRROR_PORT), functools.partial(_Quiet, directory=str(VENDOR)))
+    """Serve the vendor folder at the npm-mirror root HYPERFRAMES_GSAP_BASE_URL points at (127.0.0.1 only).
+    Uses an OS-assigned ephemeral port so parallel check/render jobs never collide on a hardcoded port."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Quiet, directory=str(VENDOR)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield MIRROR_URL
+        yield f"http://127.0.0.1:{server.server_port}/"
     finally:
         server.shutdown()
         server.server_close()
 
 
-def _env() -> dict[str, str]:
+def _env(mirror_url: str | None = None) -> dict[str, str]:
     import os
-    return {**os.environ, **HARDENED, "HYPERFRAMES_GSAP_BASE_URL": MIRROR_URL}
+    return {**os.environ, **HARDENED, "HYPERFRAMES_GSAP_BASE_URL": mirror_url or MIRROR_URL}
 
 
 def _hf() -> list[str]:
@@ -67,10 +68,10 @@ def _hf() -> list[str]:
     return [paths["hf_node"], str(BAKEOFF / "node_modules" / "hyperframes" / "bin" / "hyperframes.mjs")]
 
 
-def _run(cmd: list[str], *, cwd: Path, timeout_s: int) -> RunResult:
+def _run(cmd: list[str], *, cwd: Path, timeout_s: int, mirror_url: str | None = None) -> RunResult:
     """One run through procs.run_cli: the whole tree dies on a timeout, and Windows' transient spawn EBUSY (a locked
     file) is retried 3 times, never a real failure."""
-    return run_cli(cmd, cwd=cwd, env=_env(), timeout_s=timeout_s, ebusy_retries=3)
+    return run_cli(cmd, cwd=cwd, env=_env(mirror_url), timeout_s=timeout_s, ebusy_retries=3)
 
 
 def install_vendor(project: Path) -> None:
@@ -90,9 +91,9 @@ def check(project: Path, *, aspect: str = "9:16") -> dict:
                                        "remove it; no measurement or debug element belongs in a video"}], {})
     install_vendor(project)
     zone = ["--caption-zone", CAPTION_ZONE] if aspect == "9:16" else []
-    with vendor_mirror():
+    with vendor_mirror() as mirror_url:
         r = _run([*_hf(), "check", str(project), "--json", "--strict", "--at-transitions", "--frame-check", *zone],
-                 cwd=project, timeout_s=CHECK_TIMEOUT_S)
+                 cwd=project, timeout_s=CHECK_TIMEOUT_S, mirror_url=mirror_url)
     if r.timed_out:  # its tree is dead; a check that can't finish is the composition's to lighten
         raise CheckFailed([{"code": "check_timeout", "severity": "error", "category": "runtime",
                             "message": f"the check didn't finish in {CHECK_TIMEOUT_S} s: lighten the heaviest scene "
@@ -127,10 +128,11 @@ def render(project: Path, out_mp4: Path, *, workers: str = "auto", expected_s: f
     out_mp4.unlink(missing_ok=True)
     t0 = time.perf_counter()
     from .gpu import gpu_lock  # one heavy GPU job at a time, across the videos running side by side (9 Nov)
-    with gpu_lock(), vendor_mirror():
+    with gpu_lock(), vendor_mirror() as mirror_url:
         r = _run([*_hf(), "render", "--output", str(out_mp4), "--workers", workers, "--fps", "30", "--quality", "looks",
                   # --strict, not --strict-all: check() already gates warnings with ALLOWED; the render stops on errors
-                  "--no-best-effort", "--strict", "--browser-gpu"], cwd=project, timeout_s=RENDER_TIMEOUT_S)
+                  "--no-best-effort", "--strict", "--browser-gpu"], cwd=project, timeout_s=RENDER_TIMEOUT_S,
+                 mirror_url=mirror_url)
     if r.timed_out:
         raise RuntimeError(f"render timed out after {RENDER_TIMEOUT_S} s; its process tree was killed")
     if r.returncode != 0 or not out_mp4.is_file() or out_mp4.stat().st_size < 1000:  # never trust the exit code alone

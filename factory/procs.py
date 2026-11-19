@@ -27,12 +27,12 @@ def kill_tree(pid: int) -> None:
     try:
         parent = psutil.Process(pid)
         procs = [*parent.children(recursive=True), parent]
-    except psutil.NoSuchProcess:
+    except psutil.Error:
         return
     for proc in procs:
         try:
             proc.kill()
-        except psutil.NoSuchProcess:
+        except psutil.Error:
             pass
 
 
@@ -64,6 +64,10 @@ def _watch(p: subprocess.Popen, input: bytes | None, timeout_s: float | None, st
         if now - last[0] > stall_s or (timeout_s is not None and now - start > timeout_s):
             timed_out = True
             kill_tree(p.pid)
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
             break
     for r in readers:
         r.join(timeout=5)  # a survivor holding the pipes: its tail is lost, never waited on

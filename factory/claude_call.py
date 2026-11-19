@@ -107,7 +107,9 @@ def refresh_quota(claude_bin: list[str] | None = None) -> Path:
         except (ValueError, KeyError, TypeError):
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(reading), encoding="utf-8")
+        tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(reading), encoding="utf-8")
+        os.replace(tmp, path)
         break
     return path
 

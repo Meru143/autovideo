@@ -93,6 +93,20 @@ def off(ws: dict) -> str | None:
     return None
 
 
+def _int(val) -> int:
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float(val) -> float:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def preflight(video: Path) -> list[str]:
     """What Reels won't take (Plan 3c Review Focus 4): 9:16, H.264 and AAC, 23-60 fps, at most 25 Mbps of video,
     under 1 GB, 3 s to 15 min."""
@@ -106,7 +120,7 @@ def preflight(video: Path) -> list[str]:
     num, _, den = (v.get("avg_frame_rate") or "0/0").partition("/")
     fps = int(num) / int(den) if den.isdigit() and int(den) else 0.0
     w, h, size = v.get("width") or 0, v.get("height") or 1, video.stat().st_size
-    secs, bps = float(info.get("format", {}).get("duration") or 0), int(v.get("bit_rate") or 0)
+    secs, bps = _float(info.get("format", {}).get("duration")), _int(v.get("bit_rate"))
     return [why for bad, why in ((v.get("codec_name") != "h264", f"video is {v.get('codec_name')}, not H.264"),
                                  (a.get("codec_name") != "aac", f"audio is {a.get('codec_name')}, not AAC"),
                                  (abs(w / h - 9 / 16) > 0.01, f"{w}x{h} is not 9:16"),
@@ -122,7 +136,7 @@ def fit(video: Path) -> Path:
     finds the same bytes; YouTube keeps the full file."""
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=bit_rate", "-of",
                         "csv=p=0", str(video)], capture_output=True, text=True, timeout=60)
-    if int(r.stdout.strip() or 0) <= MAX_BPS:
+    if _int(r.stdout.strip()) <= MAX_BPS:
         return video
     copy = video.with_name("reel.mp4")
     if not copy.exists() or copy.stat().st_mtime_ns < video.stat().st_mtime_ns:
@@ -258,8 +272,12 @@ def _landed(graph: Graph, state: Path, cid: str, error: InstagramError, poll_s: 
 
 
 def _new(job: Job, graph: Graph, media_id: str, saved: dict) -> dict:
+    try:
+        permalink = graph.call("GET", media_id, fields="permalink").get("permalink")
+    except InstagramError:
+        permalink = None  # media_publish already succeeded: never skip recording the post on a permalink fetch fault
     record = {"platform": "instagram", "job": job.id, "media_id": media_id,
-              "permalink": graph.call("GET", media_id, fields="permalink").get("permalink"),
+              "permalink": permalink,
               "container_id": saved["container_id"], "consent_id": saved["consent_id"], "at": _now()}
     if (job.dir / "approval.json").exists():  # the tick's pick record (kind auto, its slot)
         record["approval"] = json.loads((job.dir / "approval.json").read_text(encoding="utf-8"))
