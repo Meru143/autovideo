@@ -107,11 +107,23 @@ def _float(val) -> float:
         return 0.0
 
 
+def _bitrate_bps(video: Path, stream_bps, format_bps=None, duration_s: float = 0.0) -> int:
+    """Video bitrate in bps: stream bit_rate when numeric, else format bit_rate, else file_size * 8 / duration_s.
+    Returns MAX_BPS + 1 (fail closed) if neither bitrate nor duration can be determined."""
+    if (bps := _int(stream_bps)) > 0:
+        return bps
+    if (bps := _int(format_bps)) > 0:
+        return bps
+    if duration_s > 0:
+        return int(video.stat().st_size * 8 / duration_s)
+    return MAX_BPS + 1
+
+
 def preflight(video: Path) -> list[str]:
     """What Reels won't take (Plan 3c Review Focus 4): 9:16, H.264 and AAC, 23-60 fps, at most 25 Mbps of video,
     under 1 GB, 3 s to 15 min."""
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,"
-                        "avg_frame_rate,bit_rate:format=duration", "-of", "json", str(video)],
+                        "avg_frame_rate,bit_rate:format=duration,bit_rate", "-of", "json", str(video)],
                        capture_output=True, text=True, timeout=60)
     if r.returncode:
         return [f"ffprobe can't read {video.name}: {r.stderr.strip()[-200:]}"]
@@ -120,7 +132,9 @@ def preflight(video: Path) -> list[str]:
     num, _, den = (v.get("avg_frame_rate") or "0/0").partition("/")
     fps = int(num) / int(den) if den.isdigit() and int(den) else 0.0
     w, h, size = v.get("width") or 0, v.get("height") or 1, video.stat().st_size
-    secs, bps = _float(info.get("format", {}).get("duration")), _int(v.get("bit_rate"))
+    fmt = info.get("format", {})
+    secs = _float(fmt.get("duration"))
+    bps = _bitrate_bps(video, v.get("bit_rate"), fmt.get("bit_rate"), secs)
     return [why for bad, why in ((v.get("codec_name") != "h264", f"video is {v.get('codec_name')}, not H.264"),
                                  (a.get("codec_name") != "aac", f"audio is {a.get('codec_name')}, not AAC"),
                                  (abs(w / h - 9 / 16) > 0.01, f"{w}x{h} is not 9:16"),
@@ -134,9 +148,13 @@ def fit(video: Path) -> Path:
     """The file a Reel posts: the video, or reel.mp4 beside it when its video is over Reels' bitrate cap (a story
     channel's canvas film ran at 26 Mbps, 7 Nov). The copy is made once per version of the video, so a resumed session
     finds the same bytes; YouTube keeps the full file."""
-    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=bit_rate", "-of",
-                        "csv=p=0", str(video)], capture_output=True, text=True, timeout=60)
-    if _int(r.stdout.strip()) <= MAX_BPS:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=bit_rate:format=duration,bit_rate", "-of", "json", str(video)],
+                       capture_output=True, text=True, timeout=60)
+    info = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else {}
+    v = (info.get("streams") or [{}])[0]
+    fmt = info.get("format") or {}
+    if _bitrate_bps(video, v.get("bit_rate"), fmt.get("bit_rate"), _float(fmt.get("duration"))) <= MAX_BPS:
         return video
     copy = video.with_name("reel.mp4")
     if not copy.exists() or copy.stat().st_mtime_ns < video.stat().st_mtime_ns:
