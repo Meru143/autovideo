@@ -1,0 +1,85 @@
+@import "tailwindcss" source(".");
+
+/* IBM Plex, self-hosted (no font CDN): the Latin files only, weights 400 and 500 */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-weight: 500;
+  font-display: swap;
+  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-weight: 500;
+  font-display: swap;
+  src: url("@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+}
+
+/* The design system (the plan's Global Constraints). Tailwind's own palette, weights and shadows are cleared, so
+   only these exist: bg-page, border-line, text-secondary, bg-lamp-live and so on. */
+@theme {
+  --color-*: initial;
+  --color-page: #141413;
+  --color-panel: #1B1B1A;
+  --color-raised: #232321;
+  --color-line: rgba(236, 234, 230, 0.08);
+  --color-primary: #ECEAE6;
+  --color-secondary: #A9A6A0;
+  --color-muted: #75726D;
+  --color-lamp-live: #D2463A;
+  --color-lamp-ready: #3E9E62;
+  --color-lamp-making: #4A4945;
+  --color-lamp-attention: #C98A2E;
+
+  --font-*: initial;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-weight-*: initial;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+  --text-shadow-*: initial;
+
+  /* the one entrance: a note in the corner fades in, rising a few pixels */
+  --animate-rise: rise 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+}
+
+@layer base {
+  html {
+    background-color: var(--color-page);
+    color: var(--color-primary);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-secondary);
+    outline-offset: 2px;
+  }
+  /* the browser's own surfaces take the palette too: selected text, and headings that wrap without a lone word */
+  ::selection {
+    background-color: color-mix(in srgb, var(--color-primary) 24%, transparent);
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+}

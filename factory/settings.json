@@ -1,0 +1,84 @@
+{
+  "paused": true,
+  "videos_at_once": 3,
+  "auto_retries": 1,
+  "stop_at": {
+    "weekly": 100,
+    "five_hour": 100,
+    "model_weekly": 90
+  },
+  "fallback": {
+    "model": "claude-opus-5-5",
+    "effort": "medium"
+  },
+  "steps": {
+    "research": {
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+    },
+    "topics": {
+      "model": "claude-haiku-5-5",
+      "effort": "xhigh"
+    },
+    "judge": {
+      "model": "claude-haiku-5-5",
+      "effort": "xhigh"
+    },
+    "critic": {
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+    },
+    "script": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "story": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "shots": {
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+    },
+    "cast": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "sets": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "scene": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "music": {
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+    },
+    "fix": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "repair": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "review": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "metadata": {
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+    },
+    "lessons": {
+      "model": "claude-haiku-5-5",
+      "effort": "xhigh"
+    },
+    "loop": {
+      "model": "claude-haiku-5-5",
+      "effort": "xhigh"
+    }
+  }
+}

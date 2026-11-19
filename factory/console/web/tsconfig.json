@@ -1,0 +1,6 @@
+{
+  // The solution, as the Vite react-ts template has it: no files of its own, so `tsc -b` and the editor take each
+  // file from the project that holds it (the app's src, or what Node runs).
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }]
+}

@@ -1,0 +1,94 @@
+{
+  "tone": {
+    "source_url": "https://registry.npmjs.org/tone/-/tone-15.1.22.tgz",
+    "page": "https://www.npmjs.com/package/tone/v/15.1.22",
+    "archive_sha256": "86dec0a9521dd69a59e7b824a83b132afd1ef8284bda1e7799449ab9d84d9f62",
+    "licence": "MIT License, Copyright (c) 2014-2020 Yotam Mann (package LICENSE.md; build header: MIT)",
+    "uploader": "npm package tone (Tone.js, Yotam Mann)",
+    "read_on": "2026-11-05",
+    "files": {
+      "tone": {
+        "path": "factory/music/vendor/Tone.js",
+        "sha256": "e290952fa43d9a7a780182a83c6fccf44d79cb7ae2cba102ef1f2b9d98124e22"
+      }
+    }
+  },
+  "upright_kw": {
+    "source_url": "https://freepats.zenvoid.org/Piano/UprightPianoKW/UprightPianoKW-SFZ+FLAC-20220221.7z",
+    "page": "https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html",
+    "archive_sha256": "3a66da3b25a2fd9499d90bcf09f1aee4431825796e249361b48af59b1201e703",
+    "licence": "Published under the terms of the Creative Commons CC0 1.0 public domain dedication.",
+    "uploader": "FreePats project (recorded by Gonzalo and Roberto, 2017)",
+    "read_on": "2026-11-05",
+    "files": {
+      "C2": {
+        "path": "factory/music/samples/upright_kw/C2.flac",
+        "sha256": "992dc386e8687e1d2e58b44e523d0961d80a98dcd113432c761c636cf9db02dd"
+      },
+      "D#2": {
+        "path": "factory/music/samples/upright_kw/Ds2.flac",
+        "sha256": "93637b18629e6d48aa5ecc87c11e6e00114a4984353b325c8c45d908efe3ac46"
+      },
+      "F#2": {
+        "path": "factory/music/samples/upright_kw/Fs2.flac",
+        "sha256": "d5f7f5b399982e8aab0db2fc419c4e6ab39dd8bf3b4a67acac13bd5a473b7b4b"
+      },
+      "A2": {
+        "path": "factory/music/samples/upright_kw/A2.flac",
+        "sha256": "91d8f90471403494595211ac05e0e1bab92cbdeefea38ea4513466d016e39ce6"
+      },
+      "C3": {
+        "path": "factory/music/samples/upright_kw/C3.flac",
+        "sha256": "501f7703e1006f1afd37f8dcc438906057e6f7dc84c0952237cf84d8ebaec6cb"
+      },
+      "D#3": {
+        "path": "factory/music/samples/upright_kw/Ds3.flac",
+        "sha256": "c34359c5561bc71a53bce1c24ebd62fa335be5098feb63ab9eaa57af51b57521"
+      },
+      "F#3": {
+        "path": "factory/music/samples/upright_kw/Fs3.flac",
+        "sha256": "5a39e7f31344425491c439847a009d0859aaeaf51737dbe952d47bd86d0d4998"
+      },
+      "A3": {
+        "path": "factory/music/samples/upright_kw/A3.flac",
+        "sha256": "498682c53eb222dd88692a21ffdf48641873df63287d93dd43cd814544874372"
+      },
+      "C4": {
+        "path": "factory/music/samples/upright_kw/C4.flac",
+        "sha256": "4382a54ffbb731cc8c7d8d88e322b1d669d6d44ccdca71eb17860d3c81967b4f"
+      },
+      "D#4": {
+        "path": "factory/music/samples/upright_kw/Ds4.flac",
+        "sha256": "105074540a60b82228cc6d9defb84b37aaab2a18d7526ccbf197500529040ff7"
+      },
+      "F#4": {
+        "path": "factory/music/samples/upright_kw/Fs4.flac",
+        "sha256": "157fa02c06d4cc768f059ae1954c11f8dabf0dae65da1f94f120570d7d6a50e5"
+      },
+      "A4": {
+        "path": "factory/music/samples/upright_kw/A4.flac",
+        "sha256": "1eb7f53be83b4fb86a5fb5f2e8b2cebd6e1da3c1a7e8c3305b20533e6ac63d86"
+      },
+      "C5": {
+        "path": "factory/music/samples/upright_kw/C5.flac",
+        "sha256": "b6c6948fdc8b4f0a35d260229de051d912077123ce4a4c19e2a41edca9d4214d"
+      },
+      "D#5": {
+        "path": "factory/music/samples/upright_kw/Ds5.flac",
+        "sha256": "6730be1a4ccc3747d46535fc64b6bfccd725a433ef10c122a688cf643ef0eb17"
+      },
+      "F#5": {
+        "path": "factory/music/samples/upright_kw/Fs5.flac",
+        "sha256": "2df9d8a44724bb7c2c9bbbd05d6b459c76ce9c7af35eac925bba1b0ab7878ca7"
+      },
+      "A5": {
+        "path": "factory/music/samples/upright_kw/A5.flac",
+        "sha256": "1f68815ff745a1968a706916586a5d4a96b39aeca1c444a8d75dc2b6a5555ef3"
+      },
+      "C6": {
+        "path": "factory/music/samples/upright_kw/C6.flac",
+        "sha256": "56c6f17c3b63f273ccb69c406c030a8715aa847607ebecc56f992fda2aad7813"
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+# Python and dependencies
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+
+# Secrets, API keys, credentials
+secrets/
+.env
+*.env
+*.env.*
+*.key
+*.pem
+*.token
+
+# Models and large media
+models/
+factory/out/
+factory/music/samples/
+
+# Spikes and internal documentation (excluded from public repo)
+spikes/
+docs/
+
+# SFX library binaries (manifest only)
+factory/sfx_library/*
+!factory/sfx_library/manifest.jsonl
+
+# All channels and channel brand assets (personal - excluded from public repo)
+channels/
+brand/
+
+# Channel directions, briefs, and internal test suites
+factory/briefs/
+factory/FAILURE_MODES.md
+factory/selftest.py
+factory/fixtures/
+factory/results/
+factory/console/web/e2e/
+
+# Research and scratch files
+research/
+scratch/
+
+# Agent configuration, worktrees, and instructions
+AGENTS.md
+.agents/
+.claude/
+.superpowers/
+.worktrees/
+skills-lock.json
+
+# Console and test local run outputs / logs
+factory/console/web/node_modules/
+factory/console/web/test-results/
+factory/console/web/playwright-report/
