@@ -1440,6 +1440,7 @@ class LayoutAnalyzer:
         capture: bool = False,
         progress=None,
         precise: Optional[bool] = None,
+        manual_cam_box: Optional[Box] = None,
     ) -> Optional[ClipLayoutPlan]:
         """Plan the framing for the render window [start_ms, start_ms + duration_ms).
 
@@ -1448,7 +1449,40 @@ class LayoutAnalyzer:
         `precise` (default: same as `vision`) scans every frame for camera
         changes in the same decode as face sampling, to place cuts on exact
         frames. Pacing-only plans do not need it.
+        `manual_cam_box` skips YuNet webcam detection and locks the entire clip
+        to a single static SCREEN_CAM shot using the operator-drawn webcam box.
         """
+        if manual_cam_box is not None:
+            box = (
+                manual_cam_box.clamp()
+                if isinstance(manual_cam_box, Box)
+                else Box(
+                    float(manual_cam_box["x"]),
+                    float(manual_cam_box["y"]),
+                    float(manual_cam_box["w"]),
+                    float(manual_cam_box["h"]),
+                ).clamp()
+            )
+            shot = ShotLayout(
+                start_ms=0,
+                end_ms=duration_ms,
+                layout=LayoutType.SCREEN_CAM,
+                source="manual",
+                cam_box=box,
+                cam_box_refined=True,
+                screen_box=Box(0.0, 0.0, 1.0, 1.0),
+                screen_focus=None,
+            )
+            logger.info(
+                f"Layout plan: screen_cam[0.0-{duration_ms / 1000:.1f}s,manual] cam_box={box.to_list()}"
+            )
+            return ClipLayoutPlan(
+                shots=[shot],
+                source_width=src_w,
+                source_height=src_h,
+                vision_cost_usd=0.0,
+                face_samples=[],
+            )
         if style == LayoutStyle.FIT:
             return ClipLayoutPlan(
                 shots=[ShotLayout(0, duration_ms, LayoutType.SCREEN, source="style")],

@@ -78,12 +78,14 @@ export type SettingsPage = {
   llm?: LlmProviders;
 };
 
+export type ManualCamBox = { x: number; y: number; w: number; h: number };
 export type ClipCaption = { start: number; end: number; text: string; words?: { start: number; end: number; word: string }[] };
 export type ClipSpec = {
   source_url: string; source_path: string; source_width: number; source_height: number;
   start_s: number; end_s: number; title: string; hook: string; reason: string; score: number;
   layout: "auto" | "fill" | "fit"; caption_style: string; pacing: "tight" | "natural";
   speed: number; include_captions: boolean; include_title: boolean; captions: ClipCaption[];
+  manual_cam_box?: ManualCamBox | null;
 };
 export type IngestStatus = {
   id: string; channel: string; url: string; title?: string; stage: string; detail: string;

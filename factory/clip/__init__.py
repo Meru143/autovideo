@@ -33,6 +33,7 @@ def default_spec(
     creator: str = "",
     creator_handle: str = "",
     title_stop_words: list[str] | None = None,
+    manual_cam_box: dict | None = None,
 ) -> dict:
     return {
         "source_url": source_url,
@@ -57,4 +58,5 @@ def default_spec(
         "creator": str(creator or "").strip(),
         "creator_handle": str(creator_handle or "").strip(),
         "title_stop_words": [str(w).strip().lower() for w in (title_stop_words or []) if str(w).strip()],
+        "manual_cam_box": manual_cam_box,
     }

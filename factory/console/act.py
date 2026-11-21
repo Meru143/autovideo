@@ -7,6 +7,7 @@ the file and the tree as they were. Run in the repo's folder as git sees it: `re
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import threading
@@ -557,6 +558,30 @@ def save_clip(root: Path, jid: str, body: dict) -> dict:
         spec["speed"] = spd
     if "captions" in body and isinstance(body["captions"], list):
         spec["captions"] = body["captions"]
+    if "manual_cam_box" in body:
+        mcb = body["manual_cam_box"]
+        if mcb is None:
+            spec["manual_cam_box"] = None
+        else:
+            if not isinstance(mcb, dict) or not all(k in mcb for k in ("x", "y", "w", "h")):
+                raise Invalid("manual_cam_box must be {x, y, w, h} or null")
+            vals: dict[str, float] = {}
+            for k in ("x", "y", "w", "h"):
+                v = mcb[k]
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                    raise Invalid(f"manual_cam_box.{k} must be a finite number")
+                vals[k] = float(v)
+            x, y, w, h = vals["x"], vals["y"], vals["w"], vals["h"]
+            if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                raise Invalid("manual_cam_box x and y must be between 0 and 1")
+            if w < 0.05 or h < 0.05:
+                raise Invalid("manual_cam_box w and h must be at least 0.05")
+            if x + w > 1.0 + 1e-9 or y + h > 1.0 + 1e-9:
+                raise Invalid("manual_cam_box must stay within 0..1 bounds (x+w <= 1, y+h <= 1)")
+            rx, ry = round(x, 4), round(y, 4)
+            rw = round(min(w, max(0.0, 1.0 - rx)), 4)
+            rh = round(min(h, max(0.0, 1.0 - ry)), 4)
+            spec["manual_cam_box"] = {"x": rx, "y": ry, "w": rw, "h": rh}
     _write(spec_path, json.dumps(spec, indent=2, ensure_ascii=False).encode("utf-8"))
     return {"ok": True, "spec": spec}
 

@@ -451,7 +451,7 @@ def shot_chain(
         screen_rect, _ = screen_view(shot, src_w, src_h, out_w, bottom_h)
         return (
             f"[t{i}]split=2[sa{i}][sb{i}];"
-            f"[sa{i}]{_crop(cam_rect)},scale={out_w}:{top_h}:{scale}[top{i}];"
+            f"[sa{i}]{_crop(cam_rect)},scale={out_w}:{top_h}:{scale},cas=strength=0.45[top{i}];"
             f"[sb{i}]{_crop(screen_rect)},"
             f"scale={out_w}:{bottom_h}:{scale}[bot{i}];"
             f"[top{i}][bot{i}]vstack=inputs=2,"

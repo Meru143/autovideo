@@ -1212,6 +1212,7 @@ def clip_cut(job: jobs.Job) -> dict:
     """Pipeline stage for `format.pipeline == 'clip'`: render final.mp4 via RenderingService
     (YuNet face tracking, smart screen+webcam layouts, tight pacing/dead-air cuts, ASS caption presets)."""
     from .engine.config import get_caption_preset
+    from .engine.services.layout_analyzer import Box
     from .engine.services.rendering_service import RenderingService, RenderRequest
     from .engine.services.transcription_service import TranscriptSegment, TranscriptWord
 
@@ -1238,6 +1239,24 @@ def clip_cut(job: jobs.Job) -> dict:
         for seg in spec.get("captions", [])
     ]
 
+    manual_cam_box: Box | None = None
+    raw_cam = spec.get("manual_cam_box")
+    if isinstance(raw_cam, dict) and all(k in raw_cam for k in ("x", "y", "w", "h")):
+        try:
+            bx, by, bw, bh = float(raw_cam["x"]), float(raw_cam["y"]), float(raw_cam["w"]), float(raw_cam["h"])
+            if (
+                all(math.isfinite(v) for v in (bx, by, bw, bh))
+                and 0.0 <= bx <= 1.0
+                and 0.0 <= by <= 1.0
+                and bw >= 0.05
+                and bh >= 0.05
+                and bx + bw <= 1.0 + 1e-9
+                and by + bh <= 1.0 + 1e-9
+            ):
+                manual_cam_box = Box(bx, by, min(bw, 1.0 - bx), min(bh, 1.0 - by)).clamp()
+        except (TypeError, ValueError):
+            manual_cam_box = None
+
     out_mp4 = job.dir / "final.mp4"
     req = RenderRequest(
         video_path=str(spec["source_path"]),
@@ -1256,6 +1275,7 @@ def clip_cut(job: jobs.Job) -> dict:
         layout_style=spec.get("layout", "auto"),
         pacing=spec.get("pacing", "natural"),
         video_speed=float(spec.get("speed") or 1.0),
+        manual_cam_box=manual_cam_box,
     )
 
     renderer = RenderingService()

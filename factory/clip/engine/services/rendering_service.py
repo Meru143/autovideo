@@ -37,7 +37,7 @@ from factory.clip.engine.services.clip_editor import (
     subtract_intervals,
     window_words,
 )
-from factory.clip.engine.services.layout_analyzer import ClipLayoutPlan, LayoutAnalyzer, LayoutType, ShotLayout
+from factory.clip.engine.services.layout_analyzer import Box, ClipLayoutPlan, LayoutAnalyzer, LayoutType, ShotLayout
 from factory.clip.engine.services.framing_trace import make_trace, save_trace
 from factory.clip.engine.services.editorial_context import window_protection, record_prevented_cuts
 from factory.clip.engine.services.editorial_review import review_retained_clip
@@ -130,6 +130,9 @@ class RenderRequest:
     debug_capture: bool = False
     progress_callback: Optional[Callable[[str, Optional[float]], None]] = None
     manual_plan: Optional[ClipLayoutPlan] = None
+    # Normalized (0..1) webcam box override from Console Clip Editor; skips YuNet
+    # detection and locks the entire clip to a single static SCREEN_CAM shot.
+    manual_cam_box: Optional[Box] = None
     # Exact source-time selections from the manual editor; no automatic pacing,
     # sliver removal or protected-interval restoration may change these cuts.
     manual_ranges_ms: Optional[list[tuple[int, int]]] = None
@@ -603,6 +606,11 @@ class RenderingService:
         window_ms: int,
     ) -> Optional[ClipLayoutPlan]:
         """Analyze the render window's shots. None means use the letterbox."""
+        if request.manual_cam_box is not None:
+            return await self.layout_analyzer.analyze(
+                request.video_path, window_start_ms, window_ms, source_w, source_h, request.layout_style,
+                manual_cam_box=request.manual_cam_box,
+            )
         if request.layout_style == LayoutStyle.FIT:
             return None
         try:

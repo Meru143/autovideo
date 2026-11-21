@@ -1,6 +1,6 @@
-import { Scissors, Sparkles } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
-import { api, errText, type ClipData, type ClipSpec } from "../api";
+import { Crop, Scissors, Sparkles, X } from "lucide-react";
+import { type PointerEvent, useEffect, useId, useRef, useState } from "react";
+import { api, errText, type ClipData, type ClipSpec, type ManualCamBox } from "../api";
 import { Button } from "./Button";
 import { toast } from "./Toasts";
 
@@ -13,16 +13,27 @@ function fmt(s: number): string {
   return `${m}:${r}`;
 }
 
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
 export function ClipEditor({ videoId, onRendered }: { videoId: string; onRendered: () => void }) {
   const [loaded, setLoaded] = useState<ClipData>();
   const [spec, setSpec] = useState<ClipSpec>();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
+  const [drawing, setDrawing] = useState(false);
+  const [draftBox, setDraftBox] = useState<ManualCamBox | null>(null);
   const sourceRef = useRef<HTMLVideoElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const dragOriginRef = useRef<{ x: number; y: number } | null>(null);
   const headingId = useId();
 
   useEffect(() => {
     let live = true;
+    setDrawing(false);
+    setDraftBox(null);
+    dragOriginRef.current = null;
     api.clip(videoId)
       .then((d) => {
         if (live) {
@@ -48,11 +59,80 @@ export function ClipEditor({ videoId, onRendered }: { videoId: string; onRendere
   if (!loaded || !spec) return null;
 
   const duration = Math.max(0, spec.end_s - spec.start_s);
+  const activeBox: ManualCamBox | null = draftBox ?? spec.manual_cam_box ?? null;
+
+  const normPoint = (e: PointerEvent<HTMLDivElement>) => {
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    return { x, y };
+  };
+
+  const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (!drawing || (e.pointerType === "mouse" && e.button !== 0)) return;
+    const pt = normPoint(e);
+    if (!pt) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragOriginRef.current = pt;
+    setDraftBox({ x: pt.x, y: pt.y, w: 0, h: 0 });
+  };
+
+  const handlePointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const origin = dragOriginRef.current;
+    if (!origin) return;
+    const pt = normPoint(e);
+    if (!pt) return;
+    setDraftBox({
+      x: Math.min(origin.x, pt.x),
+      y: Math.min(origin.y, pt.y),
+      w: Math.abs(pt.x - origin.x),
+      h: Math.abs(pt.y - origin.y),
+    });
+  };
+
+  const finishDrag = (e: PointerEvent<HTMLDivElement>) => {
+    const origin = dragOriginRef.current;
+    if (!origin) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    const pt = normPoint(e);
+    dragOriginRef.current = null;
+    const raw = pt
+      ? {
+          x: Math.min(origin.x, pt.x),
+          y: Math.min(origin.y, pt.y),
+          w: Math.abs(pt.x - origin.x),
+          h: Math.abs(pt.y - origin.y),
+        }
+      : draftBox;
+    setDraftBox(null);
+    if (!raw || raw.w < 0.05 || raw.h < 0.05) {
+      toast({ title: "Box too small", text: "Drag a webcam box at least 5% wide and 5% tall.", lamp: "attention" });
+      return;
+    }
+    const rx = Math.max(0, Math.min(0.95, round4(raw.x)));
+    const ry = Math.max(0, Math.min(0.95, round4(raw.y)));
+    const rw = Math.max(0.05, Math.min(round4(1 - rx), round4(raw.w)));
+    const rh = Math.max(0.05, Math.min(round4(1 - ry), round4(raw.h)));
+    setSpec((prev) => (prev ? { ...prev, manual_cam_box: { x: rx, y: ry, w: rw, h: rh } } : prev));
+    setDrawing(false);
+  };
+
+  const clearCamBox = () => {
+    dragOriginRef.current = null;
+    setDraftBox(null);
+    setDrawing(false);
+    setSpec((prev) => (prev ? { ...prev, manual_cam_box: null } : prev));
+  };
 
   const saveAndRender = async () => {
     setBusy(true);
     try {
-      await api.saveClip(videoId, spec);
+      const saved = await api.saveClip(videoId, spec);
+      setSpec(saved.spec);
       await api.rerenderClip(videoId);
       toast({ title: "Clip re-rendered", text: `${spec.layout} · ${spec.caption_style} · ${duration.toFixed(1)}s`, lamp: "ready" });
       onRendered();
@@ -83,17 +163,49 @@ export function ClipEditor({ videoId, onRendered }: { videoId: string; onRendere
 
       {loaded.source_available && (
         <div className="mb-3 flex flex-col gap-2">
-          <video
-            ref={sourceRef}
-            controls
-            playsInline
-            preload="metadata"
-            src={loaded.source_url}
-            onLoadedMetadata={() => {
-              if (sourceRef.current) sourceRef.current.currentTime = spec.start_s;
-            }}
-            className="aspect-video w-full rounded-lg border border-line bg-page object-contain"
-          />
+          <div
+            ref={stageRef}
+            className="relative aspect-video w-full overflow-hidden rounded-lg border border-line bg-page"
+          >
+            <video
+              ref={sourceRef}
+              controls={!drawing}
+              playsInline
+              preload="metadata"
+              src={loaded.source_url}
+              onLoadedMetadata={() => {
+                if (sourceRef.current) sourceRef.current.currentTime = spec.start_s;
+              }}
+              className="h-full w-full object-contain"
+            />
+            {activeBox && activeBox.w > 0 && activeBox.h > 0 && (
+              <div
+                aria-label="Manual webcam crop box"
+                style={{
+                  left: `${activeBox.x * 100}%`,
+                  top: `${activeBox.y * 100}%`,
+                  width: `${activeBox.w * 100}%`,
+                  height: `${activeBox.h * 100}%`,
+                  boxShadow: drawing ? "0 0 0 9999px rgba(20, 20, 19, 0.35)" : undefined,
+                }}
+                className="pointer-events-none absolute border-2 border-lamp-attention bg-lamp-attention/20"
+              >
+                <span className="absolute left-1 top-1 rounded bg-page/80 px-1.5 py-0.5 font-mono text-[10px] font-medium text-lamp-attention">
+                  Webcam
+                </span>
+              </div>
+            )}
+            {drawing && (
+              <div
+                data-testid="cam-box-drawer"
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={finishDrag}
+                onPointerCancel={finishDrag}
+                className="absolute inset-0 z-10 cursor-crosshair select-none touch-none"
+              />
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button disabled={busy} onClick={() => setFromPlayhead("start_s")}>Set start at playhead</Button>
             <Button disabled={busy} onClick={() => setFromPlayhead("end_s")}>Set end at playhead</Button>
@@ -108,6 +220,31 @@ export function ClipEditor({ videoId, onRendered }: { videoId: string; onRendere
             >
               Jump to start
             </Button>
+            <Button
+              primary={drawing}
+              disabled={busy}
+              aria-pressed={drawing}
+              onClick={() => {
+                dragOriginRef.current = null;
+                setDraftBox(null);
+                setDrawing((v) => !v);
+              }}
+            >
+              <Crop aria-hidden size={14} strokeWidth={1.5} className="mr-1.5 inline" />
+              {drawing ? "Cancel drawing" : "Draw webcam box"}
+            </Button>
+            <Button disabled={busy || (!spec.manual_cam_box && !draftBox)} onClick={clearCamBox}>
+              <X aria-hidden size={14} strokeWidth={1.5} className="mr-1 inline" />
+              Clear box
+            </Button>
+            {drawing ? (
+              <span className="text-xs text-lamp-attention">Drag on the video to box the webcam</span>
+            ) : spec.manual_cam_box ? (
+              <span className="font-mono text-xs text-secondary">
+                Cam box: {Math.round(spec.manual_cam_box.x * 100)}%, {Math.round(spec.manual_cam_box.y * 100)}% ·{" "}
+                {Math.round(spec.manual_cam_box.w * 100)}%×{Math.round(spec.manual_cam_box.h * 100)}%
+              </span>
+            ) : null}
           </div>
         </div>
       )}
