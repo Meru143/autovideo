@@ -232,7 +232,7 @@ class VideoDownloaderService:
             opts["merge_output_format"] = "mp4"
             opts["postprocessors"] = [
                 {
-                    'key': 'FFmpegVideoConvertor',
+                    'key': 'FFmpegVideoRemuxer',
                     'preferedformat': 'mp4',
                 }
             ]

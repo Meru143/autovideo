@@ -293,7 +293,9 @@ def _publish(state: dict, legs: dict, conn, root: Path, now: datetime, report: d
                 store.mark(conn, topic["brief_id"], "published", now)
     if all(leg["done"] for leg in pub["legs"].values()):
         state.pop("publishing")
-        _cleanup_job_media(root, pub["job"])
+        if any(out.get(name) == "published" or (root / "jobs" / pub["job"] / "upload.json").exists()
+               for name in pub["legs"]) and not any(out.get(name) == "capped" for name in pub["legs"]):
+            _cleanup_job_media(root, pub["job"])
 
 
 def _cleanup_job_media(root: Path, job_id: str) -> int:

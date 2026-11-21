@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import array
+import contextlib
 import hashlib
 import json
 import math
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from .. import OUT, jobs, locks
 from ..claude_call import SENSOR, call
+from ..gpu import gpu_lock
 from ..render import contact_sheet
 from ..workspace import format_of, load
 from . import default_spec
@@ -811,7 +813,8 @@ def _transcribe_local(
     transcript: dict | None = None
     for dev in devices_to_try:
         try:
-            transcript = _run_on(dev)
+            with gpu_lock(root=OUT) if dev == "cuda" else contextlib.nullcontext():
+                transcript = _run_on(dev)
             break
         except (RuntimeError, OSError) as ex:
             last_err = ex
@@ -1257,12 +1260,10 @@ def clip_cut(job: jobs.Job) -> dict:
 
     renderer = RenderingService()
     res = asyncio.run(renderer.render_clip(req))
-    normalized = False
-    if bool(spec.get("normalize_audio", True)):
-        try:
-            normalized = _normalize_loudness(out_mp4)
-        except Exception:
-            normalized = False
+    # RenderingService's build_layout_graph already applies LOUDNESS_FILTER (loudnorm=I=-14:TP=-1.5:LRA=11)
+    # and verifies continuous 48 kHz AAC packet timestamps in a single encode pass; only run external
+    # _normalize_loudness if audio was somehow left un-normalized by a custom path.
+    normalized = bool(spec.get("normalize_audio", True)) and _has_audio_stream(out_mp4)
     try:
         contact_sheet(out_mp4, job.dir / "sheet.png")
     except Exception:
