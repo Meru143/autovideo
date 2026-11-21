@@ -1,6 +1,6 @@
 import * as Switch from "@radix-ui/react-switch";
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { api, errText, type Choice, type FactorySettings, type FactorySettingsChange, type SettingsPage } from "../api";
+import { api, errText, type Choice, type FactorySettings, type FactorySettingsChange, type LlmProviders, type SettingsPage } from "../api";
 import { Button } from "../components/Button";
 import { toast } from "../components/Toasts";
 
@@ -193,6 +193,8 @@ export function Settings() {
             ))}
           </Section>
 
+          {page?.llm && <ProvidersSection llm={page.llm} steps={page.steps} onSaved={load} />}
+
           <Section title="Claude steps">
             <table className="w-full text-sm">
               <thead>
@@ -246,5 +248,98 @@ export function Settings() {
         </Section>
       )}
     </div>
+  );
+}
+
+
+function ProvidersSection({ llm, steps, onSaved }: { llm: LlmProviders; steps: string[]; onSaved: () => Promise<void> }) {
+  const [active, setActive] = useState(llm.active_provider);
+  const [fallbacks, setFallbacks] = useState(llm.fallback_providers.join(", "));
+  const [models, setModels] = useState<Record<string, string>>(
+    () => Object.fromEntries(llm.providers.map((p) => [p.name, p.model])),
+  );
+  const [stepMap, setStepMap] = useState<Record<string, string>>(() => ({ ...llm.steps }));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setActive(llm.active_provider);
+    setFallbacks(llm.fallback_providers.join(", "));
+    setModels(Object.fromEntries(llm.providers.map((p) => [p.name, p.model])));
+    setStepMap({ ...llm.steps });
+  }, [llm]);
+
+  const providerOptions: [string, string][] = llm.providers.map((p) => [p.name, p.name]);
+  const stepOptions: [string, string][] = [["", `default (${active})`], ...providerOptions];
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const fb = fallbacks.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+      await api.saveProviders({ active_provider: active, fallback_providers: fb, models, steps: stepMap });
+      toast({ title: "Providers saved", text: "Updated secrets/providers.json for the multi-provider router.", lamp: "ready" });
+      await onSaved();
+    } catch (e) {
+      toast({ title: "Providers not saved", text: errText(e), lamp: "attention" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="LLM providers">
+      <p className="text-xs text-secondary">
+        Multi-provider routing from <span className="font-mono">secrets/providers.json</span> (API keys stay on disk and are never sent to the browser).
+      </p>
+      <Row label="Default provider">
+        <Pick label="Default provider" value={active} options={providerOptions} onChange={setActive} />
+      </Row>
+      <Row label="Fallback order" hint="comma-separated">
+        <input
+          aria-label="Fallback order"
+          type="text"
+          value={fallbacks}
+          onChange={(e) => setFallbacks(e.target.value)}
+          className={`${INPUT} w-64`}
+        />
+      </Row>
+      <div className="border-t border-line pt-3">
+        <p className="mb-2 text-xs text-secondary">Default model per provider</p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {llm.providers.map((p) => (
+            <label key={p.name} className="flex items-center gap-2 text-sm">
+              <span className="w-24 shrink-0 font-mono text-xs text-secondary">{p.name}</span>
+              <input
+                type="text"
+                placeholder="default"
+                value={models[p.name] ?? ""}
+                onChange={(e) => setModels({ ...models, [p.name]: e.target.value })}
+                className={`${INPUT} min-w-0 flex-1`}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="border-t border-line pt-3">
+        <p className="mb-2 text-xs text-secondary">Per-step provider override</p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {steps.map((step) => (
+            <label key={step} className="flex items-center gap-2 text-sm">
+              <span className="w-24 shrink-0 text-xs text-secondary">{step}</span>
+              <Pick
+                label={`${step} provider`}
+                value={stepMap[step] ?? ""}
+                options={stepOptions}
+                onChange={(v) => setStepMap({ ...stepMap, [step]: v })}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
+      <div>
+        <Button primary busy={busy} onClick={() => void save()}>
+          {busy ? "Saving…" : "Save providers"}
+        </Button>
+      </div>
+    </Section>
   );
 }

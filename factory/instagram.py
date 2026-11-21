@@ -166,11 +166,14 @@ def fit(video: Path) -> Path:
     return copy
 
 
-def _container(graph: Graph, caption: str) -> str:
-    return graph.call("POST", f"{graph.user}/media", media_type="REELS", upload_type="resumable", caption=caption,
-                      share_to_feed="true", thumb_offset="0",  # the hook is on screen at 0 s
-                      # Meta's AI tag: every channel narrates with an AI voice (5.8; operator, 7 Nov: "Tag on")
-                      is_ai_generated="true")["id"]  # ponytail: one value; a per-channel setting if a human ever narrates
+def _container(graph: Graph, caption: str, *, ai_generated: bool = True) -> str:
+    params = {
+        "media_type": "REELS", "upload_type": "resumable", "caption": caption,
+        "share_to_feed": "true", "thumb_offset": "0",  # the hook is on screen at 0 s
+    }
+    if ai_generated:
+        params["is_ai_generated"] = "true"
+    return graph.call("POST", f"{graph.user}/media", **params)["id"]
 
 
 def _send(graph: Graph, cid: str, video: Path) -> None:
@@ -255,7 +258,7 @@ def publish_reel(job: Job, video: Path, caption: str, *, graph: Graph, poll_s: f
         if problems := preflight(video):
             raise InstagramError(f"{video.name} won't go as a Reel: {'; '.join(problems)}")
         consent = next(c for c in ws["consent"] if c["action"] == "upload_public_scheduled")
-        saved = {"container_id": _container(graph, caption), "size": size, "sha256": sha,
+        saved = {"container_id": _container(graph, caption, ai_generated=bool(ws.get("contains_synthetic_media", True))), "size": size, "sha256": sha,
                  "consent_id": consent.get("id"), "uploaded": False, "at": _now()}
         _save(state, saved)  # before the first byte
     cid = saved["container_id"]
@@ -273,8 +276,18 @@ def publish_reel(job: Job, video: Path, caption: str, *, graph: Graph, poll_s: f
         raise InstagramError(f"container {cid} is {code}: {text}")
     _limit(graph)
     with jobs.posting(job):  # the one step that can't be undone: a dropped job stops here, and no drop lands inside
-        return _record(job, ledger, done, _new(job, graph, graph.call("POST", f"{graph.user}/media_publish",
-                                                                      creation_id=cid)["id"], saved))
+        rec = _record(job, ledger, done, _new(job, graph, graph.call("POST", f"{graph.user}/media_publish",
+                                                                     creation_id=cid)["id"], saved))
+    if not rec.get("comment_id"):
+        if comment_text := publish._pinned_comment(job):
+            comment_id, comment_err = _post_ig_comment(graph, rec["media_id"], comment_text)
+            if comment_id:
+                rec = {**rec, "comment_id": comment_id}
+                rec.pop("comment_error", None)
+            elif comment_err:
+                rec = {**rec, "comment_error": comment_err}
+            _save(done, rec)
+    return rec
 
 
 def _landed(graph: Graph, state: Path, cid: str, error: InstagramError, poll_s: float, wait_s: float) -> None:
@@ -300,6 +313,15 @@ def _new(job: Job, graph: Graph, media_id: str, saved: dict) -> dict:
     if (job.dir / "approval.json").exists():  # the tick's pick record (kind auto, its slot)
         record["approval"] = json.loads((job.dir / "approval.json").read_text(encoding="utf-8"))
     return record
+
+
+def _post_ig_comment(graph: Graph, media_id: str, text: str) -> tuple[str | None, str | None]:
+    """Post a first comment on a newly published Instagram Reel. Non-fatal: returns (comment_id, error)."""
+    try:
+        res = graph.call("POST", f"{media_id}/comments", message=text)
+        return str(res.get("id") or ""), None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:160]}"
 
 
 def _now() -> str:

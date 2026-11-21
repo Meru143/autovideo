@@ -24,7 +24,7 @@ from .gpu import gpu_lock
 
 API = "https://generativelanguage.googleapis.com/v1beta/interactions"
 MODEL = "gemini-3.8-flash-tts"
-KEY_NAME = "GEMINI_API_KEY_PRO"  # the factory's one key (Plan 2a ruling): the one the operator's audition used
+KEY_NAME = "GEMINI_API_KEY"
 DAILY, SPACING_S = 10, 21.0  # free tier: 10 requests a day and 3 a minute per project
 MIN_AUDIO_BYTES = 4800  # 0.1 s of 24 kHz s16: less is no narration
 MAX_PITCH_RESIDUAL_ST = 0.25  # the clone's pitch median must land this close to the real narrator's
@@ -47,13 +47,31 @@ class VoiceCheckFailed(RuntimeError):
 
 
 def _key() -> str:
-    env = Path(os.environ.get("FACTORY_SECRETS", ROOT / "secrets")) / "gemini.env"
-    for line in env.read_text(encoding="utf-8-sig").splitlines() if env.exists() else []:
-        if line.strip().startswith(f"{KEY_NAME}="):
-            if key := line.split("=", 1)[1].strip().strip("\"'"):
-                return key
-            raise RuntimeError(f"{KEY_NAME} is empty in {env}")
-    raise RuntimeError(f"{KEY_NAME} is missing from {env}")
+    sec_dir = Path(os.environ.get("FACTORY_SECRETS", ROOT / "secrets"))
+    env = sec_dir / "gemini.env"
+    candidates: list[str] = []
+    if forced := os.environ.get("FACTORY_GEMINI_KEY_NAME", "").strip():
+        candidates.append(forced)
+    prov_file = sec_dir / "providers.json"
+    if prov_file.is_file():
+        try:
+            g_cfg = json.loads(prov_file.read_text(encoding="utf-8")).get("gemini")
+            if isinstance(g_cfg, dict) and (ek := str(g_cfg.get("env_key") or "").strip()):
+                candidates.append(ek)
+        except Exception:
+            pass
+    if KEY_NAME not in candidates:
+        candidates.append(KEY_NAME)
+    lines = env.read_text(encoding="utf-8-sig").splitlines() if env.exists() else []
+    for name in candidates:
+        for line in lines:
+            if line.strip().startswith(f"{name}="):
+                if key := line.split("=", 1)[1].strip().strip("\"'"):
+                    return key
+                raise RuntimeError(f"{name} is empty in {env}")
+        if val := os.environ.get(name, "").strip():
+            return val
+    raise RuntimeError(f"{candidates[0]} is missing from {env}")
 
 
 def split_c2pa(pcm: bytes) -> tuple[bytes, bytes]:

@@ -15,7 +15,10 @@ secrets/
 *.token
 
 # Models and large media
-models/
+/models/
+!factory/clip/assets/models/
+*.words.transcript.json
+*.fast.transcript.json
 factory/out/
 factory/music/samples/
 

@@ -5,7 +5,6 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import selftest
 from .workspace import channels
 
 
@@ -58,8 +57,44 @@ def main(argv: list[str] | None = None) -> int:
     cs.add_argument("--fixture", type=Path, default=None, help="serve a scratch factory built in this folder, with "
                                                                "fake publish legs (for tests)")
     cs.add_argument("--key", default=None, help="the launch key, with --fixture only (else a new one every launch)")
+    cl = sub.add_parser("clip", help="VOD and live-stream clipping commands").add_subparsers(
+        dest="clip_cmd", required=True)
+    ci = cl.add_parser("ingest", help="download a Twitch VOD/YouTube/local video, score highlights, and queue clip jobs")
+    ci.add_argument("channel")
+    ci.add_argument("url")
+    ci.add_argument("--num-clips", type=int, default=None)
+    ci.add_argument("--layout", default=None, choices=("auto", "fill", "fit"))
+    ci.add_argument("--caption-style", default=None)
+    ci.add_argument("--provider", default=None, help="LLM provider override (e.g. claude, gemini, openai, or custom provider in secrets/providers.json)")
+    ci.add_argument("--model", default=None, help="Model override for provider")
+    ci.add_argument("--long-vod", action=argparse.BooleanOptionalAction, default=None, help="Force or disable audio-first + targeted 1080p section downloads (auto-enabled for VODs > 2h)")
+    ci.add_argument("--ingest-id", default=None, help="Optional ingest tracking ID for Console Home progress")
+    cr = cl.add_parser("radar", help="find top live Twitch/YouTube streams and fastest-rising videos (keyless)")
+    cr.add_argument("--query", required=True, help="Game or topic query to scan")
+    cr.add_argument("--mode", default="all", choices=("streams", "trends", "all"))
+    cr.add_argument("--limit", type=int, default=15)
+    cr.add_argument("--hours", type=float, default=24.0, help="Lookback window in hours for trending videos")
+    cr.add_argument("--json", action="store_true", dest="as_json", help="Print raw JSON instead of a table")
+    clv = cl.add_parser("live", help="record a live Twitch/YouTube stream and auto-cut clips on chat spikes")
+    clv.add_argument("url", help="Live Twitch (https://twitch.tv/<login>) or YouTube live URL")
+    clv.add_argument("--channel", default=None, help="Optional clip channel name to auto-queue spike jobs")
+    clv.add_argument("--minutes", type=float, default=60.0)
+    clv.add_argument("--max-height", type=int, default=1080)
+    clv.add_argument("--before", type=float, default=15.0)
+    clv.add_argument("--after", type=float, default=20.0)
+    clv.add_argument("--ratio", type=float, default=1.8, help="Chat spike multiplier over rolling baseline")
+    clv.add_argument("--min-msgs", type=int, default=8, help="Minimum messages in window to trigger a spike")
+    clv.add_argument("--cooldown", type=float, default=45.0)
+    clv.add_argument("--lag", type=float, default=8.0)
+    clv.add_argument("--no-queue", action="store_true", help="Save spike_*.mp4 files without queuing autovideo jobs")
+    clv.add_argument("--watch-id", default=None, help="Optional live watcher tracking ID for Console Home")
     a = ap.parse_args(argv)
     if a.cmd == "selftest":
+        try:
+            from . import selftest
+        except ImportError:
+            print("selftest is not included in this distribution.", file=sys.stderr)
+            return 1
         return selftest.run(a.stages.split(",") if a.stages else None, ["python", "-m", "factory", *sys.argv[1:]])
     if a.cmd == "console":
         import os
@@ -177,6 +212,61 @@ def main(argv: list[str] | None = None) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(inv, indent=2), encoding="utf-8")
         print(f"{a.workspace} kit needs: {summary(inv)} -> {out}")
+        return 0
+    if a.cmd == "clip" and a.clip_cmd == "ingest":
+        import json
+        from .clip.pipeline import ingest_vod, update_ingest_status
+        try:
+            created = ingest_vod(
+                a.channel,
+                a.url,
+                num_clips=a.num_clips,
+                layout=a.layout,
+                caption_style=a.caption_style,
+                provider=a.provider,
+                model=a.model,
+                long_vod=a.long_vod,
+                ingest_id=a.ingest_id,
+            )
+        except Exception as e:
+            if a.ingest_id:
+                update_ingest_status(a.ingest_id, channel=a.channel, url=a.url, stage="error",
+                                     detail=str(e)[:240], error=f"{type(e).__name__}: {str(e)[:240]}")
+            raise
+        print(json.dumps({"queued": created}, indent=2))
+        return 0
+    if a.cmd == "clip" and a.clip_cmd == "radar":
+        import json
+        from .clip.radar import format_radar_table, scan_radar
+        data = scan_radar(query=a.query, mode=a.mode, limit=a.limit, hours=a.hours)
+        print(json.dumps(data, indent=2) if a.as_json else format_radar_table(data))
+        return 0
+    if a.cmd == "clip" and a.clip_cmd == "live":
+        import json
+        from .clip.live import update_live_status, watch_live
+        try:
+            summary = watch_live(
+                a.url,
+                channel=a.channel,
+                minutes=a.minutes,
+                max_height=a.max_height,
+                before=a.before,
+                after=a.after,
+                ratio=a.ratio,
+                min_msgs=a.min_msgs,
+                cooldown=a.cooldown,
+                lag=a.lag,
+                auto_queue=not a.no_queue,
+                watch_id=a.watch_id,
+            )
+        except Exception as e:
+            if a.watch_id:
+                update_live_status(
+                    a.watch_id, channel=a.channel, url=a.url, stage="error",
+                    detail=str(e)[:240], error=f"{type(e).__name__}: {str(e)[:240]}",
+                )
+            raise
+        print(json.dumps(summary, indent=2))
         return 0
     return 2
 

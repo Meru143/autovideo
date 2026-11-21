@@ -131,7 +131,9 @@ def legs(root: Path) -> dict:
 def _job(root: Path, conn, name: str, ws: dict, title: str, made: datetime, tick: bool) -> jobs.Job:
     """A job as the tick starts one (scheduler._channel): a queued brief, used; its brief file; topic.json. A hand-run
     job has neither the brief nor topic.json."""
-    lever = ws["topics"]["levers"][0]
+    topics = ws.get("topics") or {}
+    levers = topics.get("levers") or ["default"]
+    lever = levers[0]
     brief = {"key": title.lower(), "moment": "m", "angle": "a", "replay": "r", "lever": lever, "timely": False,
              "score": 80}
     bid = store.queue_brief(conn, name, brief, made) if tick else "hand-run"
@@ -198,7 +200,8 @@ def build(dir: Path) -> dict:
     for p in (repo, root, claude):
         _wipe(p)
     repo.mkdir(parents=True)
-    names = channels()  # sorted
+    all_names = channels()  # sorted
+    names = [n for n in all_names if "topics" in load(n, need=())] or all_names
     for n in names:
         shutil.copytree(src / n, repo / "channels" / n)
         _unpause(repo / "channels" / n / "settings.json")
@@ -277,7 +280,11 @@ def build(dir: Path) -> dict:
                                "proposal": p, "benchmark": b})
 
         for n in names:  # the topic queue
-            levers = load(n, need=())["topics"]["levers"]
+            ws_cfg = load(n, need=())
+            topics = ws_cfg.get("topics")
+            if not topics:
+                continue
+            levers = topics.get("levers") or ["default"]
             for k, idea in enumerate(QUEUED):
                 store.queue_brief(conn, n, {"key": idea, "moment": "m", "angle": "a", "replay": "r", "lever":
                                             levers[k % len(levers)], "timely": False, "score": 84 - 8 * k},

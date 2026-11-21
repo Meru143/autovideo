@@ -60,6 +60,35 @@ def _urls() -> tuple[str, str]:
             os.environ.get("FACTORY_YOUTUBE_API_URL", "https://www.googleapis.com/youtube/v3/videos"))
 
 
+def _comments_url() -> str:
+    return os.environ.get("FACTORY_YOUTUBE_COMMENTS_URL", "https://www.googleapis.com/youtube/v3/commentThreads")
+
+
+def _pinned_comment(job: Job) -> str:
+    p = job.dir / "metadata.json"
+    if not p.is_file():
+        return ""
+    try:
+        return str(json.loads(p.read_text(encoding="utf-8")).get("pinned_comment") or "").strip()
+    except Exception:
+        return ""
+
+
+def _post_youtube_comment(sess, video_id: str, text: str) -> tuple[str | None, str | None]:
+    """Post a top-level comment on a newly published YouTube video. Non-fatal: returns (comment_id, error)."""
+    try:
+        resp = sess.post(
+            _comments_url(),
+            params={"part": "snippet"},
+            json={"snippet": {"videoId": video_id, "topLevelComment": {"snippet": {"textOriginal": text}}}},
+        )
+        if resp.status_code in (200, 201):
+            return str(resp.json().get("id") or ""), None
+        return None, f"HTTP {resp.status_code}: {resp.text[:160]}"
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:160]}"
+
+
 def _rows(ledger: Path, platform: str = "youtube") -> list[dict]:
     """One platform's lines in the shared upload ledger; a line with no platform is YouTube's (from before Reels)."""
     rows = [json.loads(x) for x in ledger.read_text(encoding="utf-8").splitlines() if x.strip()] if ledger.exists() else []
@@ -178,4 +207,13 @@ def upload_private(job: Job, video: Path, payload: dict, *, session=None, root: 
     _save(done, record)
     if privacy != want:
         raise RuntimeError(f"uploaded video {video_id} is {privacy}, not {want}: check YouTube Studio now")
+    if privacy == "public" and not record.get("comment_id"):
+        if comment_text := _pinned_comment(job):
+            cid, cerr = _post_youtube_comment(sess, video_id, comment_text)
+            if cid:
+                record = {**record, "comment_id": cid}
+                record.pop("comment_error", None)
+            elif cerr:
+                record = {**record, "comment_error": cerr}
+            _save(done, record)
     return {**record, "state": "uploaded_private"}

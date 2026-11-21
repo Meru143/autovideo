@@ -92,7 +92,10 @@ def _summary(name: str, ws: dict) -> dict:
     sc = ws["schedule"]
     return {"name": name, "display_name": ws.get("display_name", name), "color": (ws.get("console") or {}).get("color"),
             "format": format_of(ws)["pipeline"], "paused": bool(sc.get("paused")), "slots": sc["slots"],
-            "timezone": sc["timezone"], "max_per_day": sc.get("max_per_day"), "instagram": instagram_of(ws)["enabled"]}
+            "timezone": sc["timezone"], "max_per_day": sc.get("max_per_day"), "instagram": instagram_of(ws)["enabled"],
+            "auto_chain": bool(sc.get("auto_chain", False)),
+            "auto_watch_streamers": list((ws.get("clip") or {}).get("auto_watch_streamers") or []),
+            "auto_watch_query": str((ws.get("clip") or {}).get("auto_watch_query") or "")}
 
 
 def _state(root: Path) -> dict:
@@ -116,7 +119,8 @@ def _facts(root: Path, name: str, ws: dict, state: dict, now: datetime) -> dict:
     slots = {j: next((t for t in free if not scheduler._capped(root, {"job": j, "ws": name, "tz": tz}, "youtube", t)),
                      None) for j in ready}
     return {"stages": [n for n, *_ in PIPELINES[format_of(ws)["pipeline"]]], "tz": tz, "ready": slots,
-            "refused": refused, "retry": scheduler._retryable(root, name)}
+            "refused": refused, "retry": scheduler._retryable(root, name),
+            "running": {x["job"] for x in scheduler._runs(state, root)}}
 
 
 def _records(d: Path) -> dict:
@@ -166,6 +170,8 @@ def _card(root: Path, jid: str, row: tuple, rec: dict, facts: dict, views: dict,
             "views": None if up is None else views.get(up.get("video_id")),
             "thumb": f"/api/videos/{jid}/thumb" if (d / "final.mp4").exists() or (d / "sheet.png").exists() else None,
             "updated": _iso(updated),
+            "running": jid in facts.get("running", ()),
+            "can_run": column == "making" and state != "dropped" and not (state == "done" and (d / "prepublic.done.json").exists()),
             "capped": column == "ready" and scheduler._capped(root, {"job": jid, "ws": name, "tz": facts["tz"]},
                                                               "youtube", now)}
 
@@ -208,7 +214,7 @@ def videos(root: Path, now: datetime | None = None) -> dict:
     col["ready"].sort(key=lambda c: (c["slot"] is None, (c["slot"] or {}).get("at") or ""))
     col["live"] = sorted((c for c in col["live"] if (c["posted"]["at"] or "") >= since),
                          key=lambda c: c["posted"]["at"] or "", reverse=True)
-    return {"videos": col["making"] + col["ready"] + col["live"]}
+    return {"videos": col["making"] + col["ready"] + col["live"], "ingests": ingests(root, now), "live_watchers": live_watchers(root, now)}
 
 
 def _events(d: Path, rec: dict, refused: list[str]) -> list[dict]:
@@ -270,12 +276,32 @@ def video(root: Path, jid: str, now: datetime | None = None) -> dict | None:
                                                        "state": now_on if n == first else "todo"}
               for n in facts["stages"]]
     ready = card["column"] == "ready"
+    meta = rec.get("metadata")
+    ig_cap_p = d / "instagram_caption.txt"
+    ig_cap = ig_cap_p.read_text(encoding="utf-8") if ig_cap_p.exists() else ""
+    up_p = _json(d / "upload_payload.json") or {}
+    yt_desc = (up_p.get("snippet") or {}).get("description")
+    meta_out = ({
+        "title": str(meta.get("title") or ""),
+        "description": str(yt_desc if yt_desc is not None else (meta.get("description") or "")),
+        "instagram_caption": ig_cap,
+        "pinned_comment": str(meta.get("pinned_comment") or ""),
+    } if isinstance(meta, dict) else None)
+    can_actions = {
+        "post": ready and not card["capped"],
+        "anyway": ready and card["capped"],
+        "run": card["can_run"] and not card["running"],
+        "retry": row[1] in ("failed", "quarantined"),
+        "drop": row[1] not in ("dropped", jobs.POSTING) and card["column"] != "live",
+    }
+    if row[1] in ("failed", "quarantined") and bool((_json(d / "prepublic.json") or {}).get("nsfw")):
+        can_actions["approve_nsfw"] = True
     return {**card, "stages": stages, "events": _events(d, rec, facts["refused"].get(jid, [])),
             "script": (d / "narration.txt").read_text(encoding="utf-8") if (d / "narration.txt").exists() else None,
             "media": f"/api/videos/{jid}/media" if (d / "final.mp4").exists() else None,
-            "can": {"post": ready and not card["capped"], "anyway": ready and card["capped"],
-                    "retry": row[1] in ("failed", "quarantined"),
-                    "drop": row[1] not in ("dropped", jobs.POSTING) and card["column"] != "live"}}  # jobs.drop's rule
+            "has_clip": (d / "clip_spec.json").is_file(),
+            "metadata": meta_out,
+            "can": can_actions}
 
 
 def thumb(root: Path, jid: str) -> Path | None:
@@ -295,7 +321,11 @@ def thumb(root: Path, jid: str) -> Path | None:
         except OSError:  # Windows: the old one is being sent; it serves this time
             pass
         part.unlink(missing_ok=True)
-    return jpg if final.is_file() and jpg.exists() else sheet if sheet.is_file() else None
+    if jpg.is_file():
+        return jpg
+    if (d / "thumbnail.jpg").is_file():
+        return d / "thumbnail.jpg"
+    return sheet if sheet.is_file() else None
 
 
 def channels() -> dict:
@@ -431,7 +461,7 @@ def _last_report(log: Path) -> dict | None:
         try:
             report = json.JSONDecoder().raw_decode(text, m.start())[0]
         except ValueError:
-            continue
+            return None
         if isinstance(report, dict) and report.get("at"):
             return report
     return None
@@ -472,4 +502,128 @@ def settings(root: Path) -> dict:
         out["settings"] = s.load()
     except ValueError as e:
         out["error"] = str(e)
+    out["llm"] = _llm_providers()
     return out
+
+
+KNOWN_PROVIDERS = ("claude", "gemini", "openai")
+
+
+def _llm_providers() -> dict:
+    """Sanitized multi-provider view from secrets/providers.json (never exposes API keys or tokens)."""
+    p_cfg: dict = {}
+    try:
+        from ..llm.config import load_providers_config
+        p_cfg = load_providers_config() or {}
+    except Exception:
+        p_cfg = {}
+    meta_keys = {"active_provider", "fallback_providers", "steps"}
+    names = list(KNOWN_PROVIDERS) + sorted(k for k in p_cfg if k not in meta_keys and k not in KNOWN_PROVIDERS)
+    providers = []
+    for name in names:
+        spec = p_cfg.get(name) if isinstance(p_cfg.get(name), dict) else {}
+        model = spec.get("model") or (spec.get("models", {}).get("default") if isinstance(spec.get("models"), dict) else "") or ""
+        providers.append({"name": name, "model": str(model), "configured": name in p_cfg or name in ("claude", "gemini")})
+    return {
+        "active_provider": str(p_cfg.get("active_provider") or "claude"),
+        "fallback_providers": list(p_cfg.get("fallback_providers") or ["gemini", "claude"]),
+        "steps": {k: str(v) for k, v in (p_cfg.get("steps") or {}).items()} if isinstance(p_cfg.get("steps"), dict) else {},
+        "providers": providers,
+    }
+
+
+def clip(root: Path, jid: str) -> dict | None:
+    """Editable clip_spec.json for a clip-pipeline job, plus layout and caption presets."""
+    from ..clip import CAPTION_STYLES, LAYOUTS
+    spec = _json(root / "jobs" / jid / "clip_spec.json")
+    if not isinstance(spec, dict):
+        return None
+    src = Path(str(spec.get("source_path") or ""))
+    return {
+        "spec": spec,
+        "layouts": list(LAYOUTS),
+        "caption_styles": list(CAPTION_STYLES),
+        "source_url": f"/api/videos/{jid}/source",
+        "source_available": src.is_file(),
+    }
+
+
+def clip_source(root: Path, jid: str) -> Path | None:
+    """Cached source VOD file for byte-range scrubbing in the Clip Editor."""
+    spec = _json(root / "jobs" / jid / "clip_spec.json")
+    if not isinstance(spec, dict):
+        return None
+    src = Path(str(spec.get("source_path") or ""))
+    return src if src.is_file() else None
+
+
+def ingests(root: Path, now: datetime | None = None) -> list[dict]:
+    """Active VOD ingests plus any finished/errored in the last 30 minutes, newest first."""
+    now = now or datetime.now(timezone.utc)
+    raw = _json(root / "clip_ingests.json")
+    if not isinstance(raw, dict):
+        return []
+    out = []
+    for item in raw.values():
+        if not isinstance(item, dict):
+            continue
+        stage = item.get("stage", "")
+        updated = item.get("updated_at")
+        if stage in ("done", "error") and updated:
+            try:
+                if now - datetime.fromisoformat(updated) > timedelta(minutes=30):
+                    continue
+            except ValueError:
+                pass
+        out.append(item)
+    return sorted(out, key=lambda x: str(x.get("updated_at") or ""), reverse=True)
+
+
+def live_watchers(root: Path, now: datetime | None = None) -> list[dict]:
+    """Active live stream chat-spike watchers plus any stopped/finished/errored in the last 30 minutes."""
+    now = now or datetime.now(timezone.utc)
+    raw = _json(root / "clip_live_watchers.json")
+    if not isinstance(raw, dict):
+        return []
+    out = []
+    for item in raw.values():
+        if not isinstance(item, dict):
+            continue
+        stage = item.get("stage", "")
+        updated = item.get("updated_at")
+        if stage in ("done", "stopped", "error") and updated:
+            try:
+                if now - datetime.fromisoformat(updated) > timedelta(minutes=30):
+                    continue
+            except ValueError:
+                pass
+        out.append(item)
+    return sorted(out, key=lambda x: str(x.get("updated_at") or ""), reverse=True)
+
+
+def _tail_log(path: Path, max_lines: int = 50) -> dict:
+    if not path.is_file():
+        return {"lines": [], "updated": None}
+    try:
+        st = path.stat()
+        with path.open("rb") as f:
+            if st.st_size > TAIL:
+                f.seek(st.st_size - TAIL)
+            raw = f.read().decode("utf-8", errors="replace")
+        lines = raw.splitlines()[-max_lines:]
+        return {"lines": lines, "updated": _iso(st.st_mtime)}
+    except OSError:
+        return {"lines": [], "updated": None}
+
+
+def job_log(root: Path, jid: str) -> dict | None:
+    with jobs._db(root) as c:
+        if c.execute("select 1 from jobs where id = ?", (jid,)).fetchone() is None:
+            return None
+    return _tail_log(root / "jobs" / jid / "tick_run.log")
+
+
+def ingest_log(root: Path, iid: str) -> dict | None:
+    if not iid or not re.fullmatch(r"[\w-]+", iid):
+        return None
+    return _tail_log(root / "clip_sources" / f"{iid}.log")

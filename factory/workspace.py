@@ -37,7 +37,7 @@ SLOT = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")  # a posting time, HH:MM in the 
 FORMAT_DEFAULTS = {"label": "video", "aspect": "9:16", "length_s": [30, 60], "max_hold_s": 3.0, "max_still_s": 1.5,
                    "max_gap_s": 5.0, "pipeline": "explainer"}
 ASPECTS = ("9:16", "16:9", "1:1")
-PIPELINES = ("explainer", "story")  # which stage list a channel runs (story format, 8.5 item 20)
+PIPELINES = ("explainer", "story", "clip")  # which stage list a channel runs (story format; clip pipeline)
 # A story channel's structure rules (design 5.4.2): shares of runtime, except the _s ones in seconds. All [H]: the
 # learning loop may tune them. load() refuses unknown keys, wrong types and reversed bands.
 STORY_RULES = {"opening": "In this world", "rule_by": 0.03, "stakes_by": 0.08, "enforcer_by_s": 0.5,
@@ -201,6 +201,10 @@ def load(name: str, *, need: tuple[str, ...] = REQUIRED, root: Path | None = Non
             bad("schedule.max_jobs must be a whole number of videos, 0 or more (leave it out for no cap)")
         if "max_per_day" in sc and not (type(sc["max_per_day"]) is int and sc["max_per_day"] >= 1):
             bad("schedule.max_per_day must be a whole number of videos a day, 1 or more (leave it out for no cap)")
+        if "cap_day" in sc and not (type(sc["cap_day"]) is int and 1 <= sc["cap_day"] <= 24):
+            bad("schedule.cap_day must be a whole number from 1 to 24")
+        if "cap_24h" in sc and not (type(sc["cap_24h"]) is int and 1 <= sc["cap_24h"] <= 48):
+            bad("schedule.cap_24h must be a whole number from 1 to 48")
         if sc.get("mode", "private") not in ("private", "public"):  # a typo is refused, never read as either
             bad(f'schedule.mode {sc["mode"]!r} must be "private" (the default) or "public"')
     if "topics" in w:  # the topic engine's settings (Plan 3a)

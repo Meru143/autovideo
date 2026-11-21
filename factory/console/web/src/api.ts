@@ -8,12 +8,15 @@ export type VideoCard = {
   lamp: Lamp; stage: string | null; step: [number, number] | null; note: string | null; slot: Slot | null;
   posted: { at: string; youtube: string | null; instagram: boolean } | null; views: number | null;
   thumb: string | null; updated: string;
+  running?: boolean; can_run?: boolean;
   capped: boolean; // a ready video whose channel already posted today: only Post anyway posts it now
 };
 export type VideoDetail = VideoCard & {
   stages: { name: string; done_at: string | null; state: "done" | "current" | "todo" | "stopped" }[];
   events: { at: string; kind: "error" | "retry" | "lesson" | "review" | "post" | "drop"; text: string }[];
-  script: string | null; media: string | null; can: { post: boolean; anyway: boolean; retry: boolean; drop: boolean };
+  script: string | null; media: string | null; has_clip?: boolean;
+  metadata?: { title: string; description: string; instagram_caption: string; pinned_comment?: string } | null;
+  can: { post: boolean; anyway: boolean; run?: boolean; retry: boolean; drop: boolean };
 };
 export type Health = {
   running: boolean; last_tick: string | null; being_made: number;
@@ -23,8 +26,11 @@ export type Health = {
 export type ChannelSummary = {
   name: string; display_name: string;
   color: string | null; // console.color in settings.json; none set: null, drawn in the muted grey
-  format: "explainer" | "story"; paused: boolean; slots: string[]; timezone: string; max_per_day: number | null;
+  format: "explainer" | "story" | "clip"; paused: boolean; slots: string[]; timezone: string; max_per_day: number | null;
   instagram: boolean;
+  auto_chain?: boolean;
+  auto_watch_streamers?: string[];
+  auto_watch_query?: string;
 };
 export type ChannelDetail = ChannelSummary & {
   playbooks: { key: string; path: string; changed: { by: "you" | "lessons" | "loop" | "other"; at: string; sha: string } | null }[];
@@ -45,7 +51,7 @@ export type Stats = {
 export type Publish = { job: string; youtube?: string; instagram?: string };
 // ok is false, still HTTP 200, when a leg is left for the tick to retry
 export type PostResult = { ok: boolean; publish: Publish };
-export type SettingsChange = Partial<Pick<ChannelSummary, "paused" | "slots" | "timezone" | "max_per_day" | "instagram">>
+export type SettingsChange = Partial<Pick<ChannelSummary, "paused" | "slots" | "timezone" | "max_per_day" | "instagram" | "auto_chain" | "auto_watch_streamers">>
   & { topics?: Partial<ChannelDetail["topics"]> };
 
 export type Choice = { model: string; effort: string };
@@ -57,11 +63,51 @@ export type FactorySettings = {
 export type FactorySettingsChange = Partial<Omit<FactorySettings, "stop_at" | "fallback" | "steps">> & {
   stop_at?: Partial<FactorySettings["stop_at"]>; fallback?: Partial<Choice>; steps?: Record<string, Partial<Choice>>;
 };
+export type LlmProviderInfo = { name: string; model: string; configured: boolean };
+export type LlmProviders = {
+  active_provider: string; fallback_providers: string[]; steps: Record<string, string>; providers: LlmProviderInfo[];
+};
+export type LlmProvidersChange = {
+  active_provider?: string; fallback_providers?: string[]; steps?: Record<string, string>; models?: Record<string, string>;
+};
 export type SettingsPage = {
   settings?: FactorySettings; error?: string; // error: the file won't load, the rest is still read
   steps: string[]; models: Record<string, string>; efforts: string[]; counts: Record<string, [number, number]>;
   account: { email: string | null; plan: string | null }; billing: string;
   quota: Record<string, { used_percentage: number; resets_at: string | null }> | null;
+  llm?: LlmProviders;
+};
+
+export type ClipCaption = { start: number; end: number; text: string; words?: { start: number; end: number; word: string }[] };
+export type ClipSpec = {
+  source_url: string; source_path: string; source_width: number; source_height: number;
+  start_s: number; end_s: number; title: string; hook: string; reason: string; score: number;
+  layout: "auto" | "fill" | "fit"; caption_style: string; pacing: "tight" | "natural";
+  speed: number; include_captions: boolean; include_title: boolean; captions: ClipCaption[];
+};
+export type IngestStatus = {
+  id: string; channel: string; url: string; title?: string; stage: string; detail: string;
+  progress?: number; queued: number; error: string | null; started_at: string; updated_at: string;
+};
+export type LiveWatcherStatus = {
+  id: string; channel: string; url: string; stage: string; detail: string;
+  spikes: number; pid?: number | null; error: string | null; started_at: string; updated_at: string;
+};
+export type RadarStream = {
+  platform: string; channel: string; name: string; title: string;
+  viewers: number; live_for: string; url: string;
+};
+export type RadarTrend = {
+  views_per_hour: number; views: number; age_h: number; duration_min: number;
+  channel: string; title: string; url: string; has_heatmap: boolean;
+};
+export type RadarResult = {
+  query: string; checked_at: string; streams?: RadarStream[]; trends?: RadarTrend[];
+};
+export type LogTail = { lines: string[]; updated: string | null };
+export type ClipData = {
+  spec: ClipSpec; layouts: ClipSpec["layout"][]; caption_styles: string[];
+  source_url: string; source_available: boolean;
 };
 
 export class ApiError extends Error {
@@ -95,19 +141,24 @@ const q = encodeURIComponent;
 
 export const api = {
   health: () => call<Health>("/api/health"),
-  videos: () => call<{ videos: VideoCard[] }>("/api/videos"),
+  videos: () => call<{ videos: VideoCard[]; ingests?: IngestStatus[]; live_watchers?: LiveWatcherStatus[] }>("/api/videos"),
   video: (id: string) => call<VideoDetail>(`/api/videos/${q(id)}`),
   thumbUrl: (id: string) => `/api/videos/${q(id)}/thumb`, // image/jpeg, for an <img>
   mediaUrl: (id: string) => `/api/videos/${q(id)}/media`, // video/mp4 with ranges, for a <video>
   post: (id: string, anyway: boolean) => call<PostResult>(`/api/videos/${q(id)}/post`, { anyway }),
+  runJob: (id: string) => call<{ ok: true; job: string; pid: number }>(`/api/videos/${q(id)}/run`, {}),
   retry: (id: string) => call<{ ok: true; state: string }>(`/api/videos/${q(id)}/retry`, {}),
   drop: (id: string) => call<{ ok: true; state: "dropped" }>(`/api/videos/${q(id)}/drop`, {}),
+  dropQueued: (channel?: string) => call<{ ok: true; dropped: string[]; count: number }>("/api/videos/drop-queued", channel ? { channel } : {}),
+  videoLog: (id: string) => call<LogTail>(`/api/videos/${q(id)}/log`),
+  ingestLog: (ingestId: string) => call<LogTail>(`/api/ingests/${q(ingestId)}/log`),
   channels: () => call<{ channels: ChannelSummary[] }>("/api/channels"),
   channel: (name: string) => call<ChannelDetail>(`/api/channels/${q(name)}`),
   saveSettings: (name: string, change: SettingsChange) =>
     call<{ ok: true; commit: string }>(`/api/channels/${q(name)}/settings`, change),
   factorySettings: () => call<SettingsPage>("/api/settings"),
   saveFactorySettings: (change: FactorySettingsChange) => call<{ ok: true; commit: string }>("/api/settings", change),
+  saveProviders: (change: LlmProvidersChange) => call<{ ok: true; llm: LlmProviders }>("/api/settings/providers", change),
   playbook: (name: string, key: string) => call<Playbook>(`/api/channels/${q(name)}/playbooks/${q(key)}`),
   savePlaybook: (name: string, key: string, text: string, base: string) =>
     call<{ ok: true; commit: string }>(`/api/channels/${q(name)}/playbooks/${q(key)}`, { text, base }),
@@ -117,4 +168,23 @@ export const api = {
   diff: (sha: string) => call<{ diff: string }>(`/api/changes/${q(sha)}/diff`),
   undo: (sha: string) => call<{ ok: true; commit: string }>(`/api/changes/${q(sha)}/undo`, {}),
   stats: () => call<Stats>("/api/stats"),
+  clip: (id: string) => call<ClipData>(`/api/videos/${q(id)}/clip`),
+  saveClip: (id: string, spec: Partial<ClipSpec>) => call<{ ok: true; spec: ClipSpec }>(`/api/videos/${q(id)}/clip`, spec),
+  saveMetadata: (id: string, body: { title?: string; description?: string; instagram_caption?: string; pinned_comment?: string }) =>
+    call<{ ok: true; metadata: { title: string; description: string; instagram_caption: string; pinned_comment: string } }>(`/api/videos/${q(id)}/metadata`, body),
+  rerenderClip: (id: string) => call<{ ok: true; render: Record<string, unknown> }>(`/api/videos/${q(id)}/rerender`, {}),
+  ingestVod: (name: string, body: { url: string; num_clips?: number; layout?: ClipSpec["layout"]; caption_style?: string; long_vod?: boolean }) =>
+    call<{ ok: true; ingest_id?: string; queued: { job: string; title: string; score: number }[] }>(`/api/channels/${q(name)}/ingest`, body),
+  clipRadar: (body: { query?: string; mode?: "streams" | "trends" | "all"; limit?: number; hours?: number }) =>
+    call<RadarResult>("/api/clip/radar", body),
+  startLiveWatch: (name: string, body: { url: string; minutes?: number; max_height?: number; ratio?: number; min_msgs?: number }) =>
+    call<{ ok: true; watch_id: string; pid: number }>(`/api/channels/${q(name)}/live`, body),
+  stopLiveWatch: (watchId: string) =>
+    call<{ ok: true; watch_id: string }>(`/api/live/${q(watchId)}/stop`, {}),
+  dismissLiveWatch: (watchId: string) =>
+    call<{ ok: true; watch_id: string }>(`/api/live/${q(watchId)}/dismiss`, {}),
+  retryIngest: (ingestId: string) =>
+    call<{ ok: true; ingest_id: string; pid: number }>(`/api/ingests/${q(ingestId)}/retry`, {}),
+  dismissIngest: (ingestId: string) =>
+    call<{ ok: true; ingest_id: string }>(`/api/ingests/${q(ingestId)}/dismiss`, {}),
 };

@@ -1,12 +1,13 @@
 import { Clapperboard } from "lucide-react";
-import { useId, type ReactNode } from "react";
-import type { ChannelSummary, Slot, VideoCard as Card } from "../api";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { api, errText, type ChannelSummary, type Slot, type VideoCard as Card } from "../api";
 import { post, usePosting } from "../post";
 import { Link } from "../router";
 import { at } from "../time";
 import { Button } from "./Button";
 import { ChannelChip } from "./ChannelChip";
 import { Lamp } from "./Lamp";
+import { toast } from "./Toasts";
 
 const Mono = ({ children }: { children: ReactNode }) => <span className="font-mono">{children}</span>;
 const Line = ({ children, strong }: { children: ReactNode; strong?: boolean }) => (
@@ -44,12 +45,27 @@ function Frame({ card }: { card: Card }) {
  * doing. Being made: why it stopped, and its stage. Ready: when it posts, and Post now; on a channel that has posted
  * today, Post anyway instead; either reads "Posting…" until a board asked for after the post's answer is on screen
  * (`asked`, ms). On air: when and where it posted, and its views against the board's best. */
-export function VideoCard({ card, channel, most, asked }: {
-  card: Card; channel?: ChannelSummary; most: number; asked: number;
+export function VideoCard({ card, channel, most, asked, onRefresh }: {
+  card: Card; channel?: ChannelSummary; most: number; asked: number; onRefresh?: () => void;
 }) {
   const title = useId();
   const posting = usePosting(card.id, asked);
+  const [starting, setStarting] = useState(false);
+  useEffect(() => {
+    if (card.running || card.column !== "making") setStarting(false);
+  }, [card.running, card.column]);
   const send = (anyway: boolean) => void post(card, anyway);
+  const runNow = async () => {
+    setStarting(true);
+    try {
+      await api.runJob(card.id);
+      toast({ title: card.title, text: "Continuing job now.", lamp: "making" });
+      onRefresh?.();
+    } catch (e) {
+      setStarting(false);
+      toast({ title: card.title, text: errText(e), lamp: "attention" });
+    }
+  };
   const { posted, step } = card;
   const where = posted && [posted.youtube && "YouTube", posted.instagram && "Instagram"].filter(Boolean).join(" + ");
   return (
@@ -94,6 +110,13 @@ export function VideoCard({ card, channel, most, asked }: {
           )}
         </div>
 
+        {card.column === "making" && (card.can_run || card.running) && (
+          <div className="relative z-10 mt-auto flex flex-wrap items-center gap-x-3 gap-y-2 pt-3">
+            <Button busy={Boolean(card.running || starting)} onClick={() => void runNow()} aria-describedby={title}>
+              {card.running || starting ? "Running…" : "Run now"}
+            </Button>
+          </div>
+        )}
         {card.column === "ready" && (
           <div className="relative z-10 mt-auto flex flex-wrap items-center gap-x-3 gap-y-2 pt-3">
             {card.capped ? (

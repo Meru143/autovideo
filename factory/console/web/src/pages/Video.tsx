@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { api, errText, type ChannelSummary, type VideoDetail } from "../api";
 import { Button } from "../components/Button";
 import { ChannelChip } from "../components/ChannelChip";
+import { ClipEditor } from "../components/ClipEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Lamp } from "../components/Lamp";
 import { toast } from "../components/Toasts";
@@ -60,7 +61,7 @@ function Player({ video }: { video: VideoDetail }) {
     <div data-testid="player" className="relative grid aspect-9/16 w-full place-items-center overflow-hidden rounded-xl border border-line bg-panel">
       {video.media && failed !== video.media ? (
         <video
-          controls playsInline preload="metadata" src={video.media} aria-label={video.title}
+          controls playsInline preload="metadata" src={`${video.media}?v=${encodeURIComponent(video.updated)}`} aria-label={video.title}
           poster={thumb || undefined} onError={() => setFailed(video.media ?? undefined)} className="size-full object-contain"
         />
       ) : thumb && !failed ? (
@@ -77,6 +78,141 @@ function Player({ video }: { video: VideoDetail }) {
 
 /** A video's page: the player on the left; on the right its stages with when each finished, the script's start, its
  * slot, Post now, Retry and Drop, and what happened to it. Polled every 5 s while the factory is on it. */
+
+function MetadataEditor({
+  videoId, metadata, readOnly, onSaved,
+}: {
+  videoId: string;
+  metadata: NonNullable<VideoDetail["metadata"]>;
+  readOnly: boolean;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState(metadata.title);
+  const [description, setDescription] = useState(metadata.description);
+  const [igCaption, setIgCaption] = useState(metadata.instagram_caption);
+  const [pinnedComment, setPinnedComment] = useState(metadata.pinned_comment ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setTitle(metadata.title);
+    setDescription(metadata.description);
+    setIgCaption(metadata.instagram_caption);
+    setPinnedComment(metadata.pinned_comment ?? "");
+  }, [metadata.title, metadata.description, metadata.instagram_caption, metadata.pinned_comment]);
+
+  const dirty =
+    title !== metadata.title ||
+    description !== metadata.description ||
+    igCaption !== metadata.instagram_caption ||
+    pinnedComment !== (metadata.pinned_comment ?? "");
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.saveMetadata(videoId, { title, description, instagram_caption: igCaption, pinned_comment: pinnedComment });
+      toast({ title: "Metadata saved", text: "Updated YouTube, Instagram & pinned comment.", lamp: "ready" });
+      onSaved();
+    } catch (e) {
+      toast({ title: "Could not save metadata", text: errText(e), lamp: "attention" });
+    }
+    setSaving(false);
+  };
+
+  return (
+    <Panel title="Title, captions &amp; pinned comment">
+      <div className="flex flex-col gap-2.5 text-sm">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-secondary">YouTube title ({title.length}/100)</span>
+          <input
+            type="text"
+            maxLength={100}
+            disabled={readOnly || saving}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="rounded border border-line bg-page px-2.5 py-1.5 text-sm text-primary focus:border-primary focus:outline-none disabled:opacity-60"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-secondary">Pinned comment (copy &amp; paste on YouTube / IG)</span>
+          <input
+            type="text"
+            maxLength={200}
+            disabled={readOnly || saving}
+            placeholder="e.g. Would you have made the same call?"
+            value={pinnedComment}
+            onChange={(e) => setPinnedComment(e.target.value)}
+            className="rounded border border-line bg-page px-2.5 py-1.5 text-sm text-primary focus:border-primary focus:outline-none disabled:opacity-60"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-secondary">YouTube description</span>
+          <textarea
+            rows={3}
+            disabled={readOnly || saving}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="rounded border border-line bg-page px-2.5 py-1.5 text-sm text-primary focus:border-primary focus:outline-none disabled:opacity-60"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-secondary">Instagram Reel caption</span>
+          <textarea
+            rows={3}
+            disabled={readOnly || saving}
+            value={igCaption}
+            onChange={(e) => setIgCaption(e.target.value)}
+            className="rounded border border-line bg-page px-2.5 py-1.5 text-sm text-primary focus:border-primary focus:outline-none disabled:opacity-60"
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          {!readOnly && (
+            <Button primary busy={saving} disabled={!dirty || !title.trim() || saving} onClick={() => void save()}>
+              {saving ? "Saving…" : "Save metadata"}
+            </Button>
+          )}
+          <Button
+            disabled={!pinnedComment.trim()}
+            onClick={() => {
+              void navigator.clipboard?.writeText(pinnedComment);
+              toast({ title: "Copied", text: "Pinned comment copied to clipboard.", lamp: "ready" });
+            }}
+          >
+            Copy comment
+          </Button>
+          <Button
+            onClick={() => {
+              void navigator.clipboard?.writeText(title);
+              toast({ title: "Copied", text: "Title copied to clipboard.", lamp: "ready" });
+            }}
+          >
+            Copy title
+          </Button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function LiveLogPanel({ videoId }: { videoId: string }) {
+  const [open, setOpen] = useState(false);
+  const { data } = usePoll(() => (open ? api.videoLog(videoId) : Promise.resolve({ lines: [], updated: null })), 4_000);
+  const lines = data?.lines ?? [];
+  return (
+    <Panel title="Live log">
+      <div className="flex flex-col gap-2">
+        <div>
+          <Button onClick={() => setOpen((v) => !v)}>{open ? "Hide log" : "Show live log"}</Button>
+        </div>
+        {open && (
+          <pre className="max-h-60 overflow-auto rounded border border-line bg-page p-2 font-mono text-xs leading-snug text-secondary whitespace-pre-wrap break-words">
+            {lines.length ? lines.join("\n") : "No tick_run.log output yet."}
+          </pre>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 export function Video({ id, channels }: { id: string; channels: ChannelSummary[] }) {
   const [making, setMaking] = useState(true);
   const { data, error, refresh } = usePoll(() => fetched(id), making ? 5_000 : 60_000);
@@ -170,6 +306,12 @@ export function Video({ id, channels }: { id: string; channels: ChannelSummary[]
             </ol>
           </Panel>
 
+          {video.metadata && (
+            <MetadataEditor videoId={video.id} metadata={video.metadata} readOnly={video.column === "live" || dropped} onSaved={refresh} />
+          )}
+
+          {video.has_clip && <ClipEditor videoId={video.id} onRendered={refresh} />}
+
           {video.script && (
             <Panel title="Script excerpt">
               <p className="text-sm">{excerpt(video.script)}</p>
@@ -201,11 +343,37 @@ export function Video({ id, channels }: { id: string; channels: ChannelSummary[]
                   {posting ? "Posting…" : "Post now"}
                 </Button>
               )}
+              {(video.running || can.run) && (
+                <Button
+                  primary={!can.post && !can.anyway && !video.running}
+                  busy={Boolean(video.running)}
+                  disabled={busy || posting}
+                  onClick={() => void act(async () => {
+                    await api.runJob(id);
+                    toast({ title: video.title, text: "Continuing job now.", lamp: "making" });
+                  })}
+                >
+                  {video.running ? "Running…" : "Run now"}
+                </Button>
+              )}
+              {(can as typeof can & { approve_nsfw?: boolean }).approve_nsfw && (
+                <Button primary disabled={busy || posting} onClick={() => void act(async () => {
+                  const r = await fetch(`/api/videos/${encodeURIComponent(id)}/approve-nsfw`, {
+                    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+                  });
+                  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                  toast({ title: video.title, text: "NSFW override saved — retrying prepublic.", lamp: "ready" });
+                })}>
+                  Approve NSFW &amp; Retry
+                </Button>
+              )}
               {can.retry && <Button disabled={busy || posting} onClick={() => void act(() => api.retry(id))}>Retry</Button>}
               {can.drop && <Button ref={dropButton} disabled={busy || posting} onClick={() => setDropping(true)}>Drop</Button>}
               {why && <p id={reason} className="w-full text-sm text-secondary">{why}</p>}
             </div>
           )}
+
+          <LiveLogPanel videoId={video.id} />
 
           <Panel title="What happened">
             {video.events.length ? (

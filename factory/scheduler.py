@@ -80,7 +80,7 @@ def spawn(job_id: str, *, cmd: list[str] | None = None, root: Path = OUT) -> int
         for flags in ((base | 0x01000000, base) if os.name == "nt" else (base,)):  # 0x01000000: leave Task Scheduler's job
             try:
                 return subprocess.Popen(cmd, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                                        env=dict(os.environ), creationflags=flags).pid
+                                        env={**os.environ, "FACTORY_OUT": str(root)}, creationflags=flags).pid
             except OSError:
                 continue
     raise RuntimeError(f"could not start job {job_id}")
@@ -120,9 +120,16 @@ def _tick_jobs(root: Path, ws: str | None = None, states: set[str] | None = None
 
 
 def _finished(root: Path, ws: str | None = None) -> list[str]:
-    """Made, reviewed and not yet uploaded."""
-    return [j for j in _tick_jobs(root, ws, {"done"}) if (root / "jobs" / j / "prepublic.done.json").exists()
-            and not (root / "jobs" / j / "upload.json").exists()]
+    """Made, reviewed and not yet uploaded. Ordered newest-first when the channel sets schedule.publish_order='newest'."""
+    out = [j for j in _tick_jobs(root, ws, {"done"}) if (root / "jobs" / j / "prepublic.done.json").exists()
+           and not (root / "jobs" / j / "upload.json").exists()]
+    if ws and len(out) > 1:
+        try:
+            if load(ws).get("schedule", {}).get("publish_order") == "newest":
+                out.reverse()
+        except Exception:
+            pass
+    return out
 
 
 def _alive(running: dict | None, root: Path) -> bool:
@@ -227,8 +234,15 @@ def _capped(root: Path, pub: dict, platform: str, now: datetime) -> bool:
         mine = {j for (j,) in c.execute("select id from jobs where workspace = ?", (pub["ws"],))} - {pub["job"]}
     zone, rows =ZoneInfo(pub.get("tz", "UTC")), _rows(root / "uploads.jsonl", platform)
     times = [datetime.fromisoformat(r["at"]) for r in rows if r.get("job") in mine and r.get("at")]
+    cap_day, cap_24h = CAP_DAY, CAP_24H
+    try:
+        ch_sc = load(pub["ws"], need=()).get("schedule", {})
+        cap_day = int(ch_sc.get("cap_day", CAP_DAY))
+        cap_24h = int(ch_sc.get("cap_24h", CAP_24H))
+    except (ValueError, KeyError, TypeError):
+        pass
     today = sum(t.astimezone(zone).date() == now.astimezone(zone).date() for t in times)
-    return today >= CAP_DAY or sum(now - t < timedelta(hours=24) for t in times) >= CAP_24H
+    return today >= cap_day or sum(now - t < timedelta(hours=24) for t in times) >= cap_24h
 
 
 def _publish(state: dict, legs: dict, conn, root: Path, now: datetime, report: dict) -> None:
@@ -279,6 +293,90 @@ def _publish(state: dict, legs: dict, conn, root: Path, now: datetime, report: d
                 store.mark(conn, topic["brief_id"], "published", now)
     if all(leg["done"] for leg in pub["legs"].values()):
         state.pop("publishing")
+        _cleanup_job_media(root, pub["job"])
+
+
+def _cleanup_job_media(root: Path, job_id: str) -> int:
+    """Delete heavy rendered/source video files after a job finishes posting, keeping thumbnails and JSON records."""
+    d = root / "jobs" / job_id
+    if not d.is_dir():
+        return 0
+    try:
+        from .console import read as console_read
+        console_read.thumb(root, job_id)
+    except Exception:
+        pass
+    removed = 0
+    for name in ("final.mp4", "source_slice.mp4", "source.mp4"):
+        f = d / name
+        if f.is_file():
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+    spec_path = d / "clip_spec.json"
+    if spec_path.is_file():
+        try:
+            src = Path(str(json.loads(spec_path.read_text(encoding="utf-8")).get("source_path") or ""))
+            if src.is_file() and (root / "clip_live") in src.resolve().parents and src.name.startswith("spike_"):
+                src.unlink(missing_ok=True)
+                removed += 1
+        except (OSError, ValueError):
+            pass
+    return removed
+
+
+def _prune_clip_caches(root: Path, *, source_max_age_h: float = 48.0, live_ts_max_age_h: float = 2.0) -> dict:
+    """Prune stale VOD caches in clip_sources/ (>48h when no ingest is active) and orphaned seg_*.ts in clip_live/."""
+    now_ts = time.time()
+    pruned_sources = 0
+    pruned_ts = 0
+
+    # Skip clip_sources cleanup if any ingest is actively running
+    active_ingest = False
+    ing_path = root / "clip_ingests.json"
+    if ing_path.is_file():
+        try:
+            data = json.loads(ing_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for entry in data.values():
+                    if not isinstance(entry, dict) or entry.get("stage") in ("done", "error"):
+                        continue
+                    upd = entry.get("updated_at")
+                    if upd:
+                        age_s = now_ts - datetime.fromisoformat(str(upd).replace("Z", "+00:00")).timestamp()
+                        if age_s < 1800:
+                            active_ingest = True
+                            break
+        except (OSError, ValueError):
+            pass
+
+    src_dir = root / "clip_sources"
+    if not active_ingest and src_dir.is_dir():
+        cutoff = now_ts - source_max_age_h * 3600.0
+        for f in src_dir.rglob("*"):
+            if f.is_file() and f.suffix.lower() in (".mp4", ".m4a", ".webm", ".mkv", ".wav", ".mp3", ".ts", ".part"):
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        f.unlink(missing_ok=True)
+                        pruned_sources += 1
+                except OSError:
+                    pass
+
+    live_dir = root / "clip_live"
+    if live_dir.is_dir():
+        ts_cutoff = now_ts - live_ts_max_age_h * 3600.0
+        for f in live_dir.rglob("seg_*.ts"):
+            if f.is_file():
+                try:
+                    if f.stat().st_mtime < ts_cutoff:
+                        f.unlink(missing_ok=True)
+                        pruned_ts += 1
+                except OSError:
+                    pass
+
+    return {"sources": pruned_sources, "live_ts": pruned_ts}
 
 
 def _rank(ws: dict) -> dict:
@@ -440,6 +538,7 @@ def _channel(ws: dict, conn, state: dict, now: datetime, runner, legs: dict, roo
             st["slot_done"], report["late_slot"] = (slot - timedelta(seconds=1)).isoformat(), slot.isoformat()
     _end_dropped(state, root)  # dropped while this tick ran: its run ends before the list lets it go
     runs = state["running"] = _runs(state, root)
+    _auto_watch(ws, root, report)
     mine = [x for x in runs if _run_ws(x, root) == name]
     if mine or len(runs) >= _max_runs():  # one job per channel, two or three at once (operator, 9 Nov)
         report["running"] = (mine or runs)[0]["job"]
@@ -522,6 +621,10 @@ def tick(now: datetime | None = None, *, runner=None, uploader=None, reel=None, 
         state_file = root / "tick_state.json"
         state = _read(state_file)
         _end_dropped(state, root)  # a kill Drop missed: first, before the publish phases that can hold the lock long
+        try:
+            _prune_clip_caches(root)
+        except Exception:
+            pass
         conn = store.connect(root)
         try:
             resumed = "publishing" in state
@@ -612,6 +715,206 @@ def post_now(job_id: str, *, anyway: bool = False, approval: dict | None = None,
             _write(root / "tick_state.json", {**rest, **state})  # persist leg progress even if interrupted
         return {"published": report["publish"].get("youtube") == "published", "publish": report["publish"],
                 "capped": False}
+
+
+def run_now(job_id: str, *, root: Path = OUT, runner=None) -> dict:
+    """The console's Run now: immediately spawn (or resume) a single job up to prepublic without waiting for the next
+    tick, holding the tick lock and recording it in tick_state.json['running'] so the tick won't double-run it and
+    Drop can stop it. If the job was stopped (failed/quarantined), resets it first with its regeneration budget
+    restored (same as Retry)."""
+    runner = runner or (lambda jid: spawn(jid, root=root))
+    with _lock(root):
+        job = jobs.load(job_id, root=root)
+        state = jobs._state(job)
+        if state == "dropped":
+            raise NotReady(f"{job_id} is dropped")
+        if (job.dir / "upload.json").exists() or (job.dir / "instagram.json").exists():
+            raise AlreadyPosted(f"{job_id} is already posted")
+        if state == "done" and (job.dir / "prepublic.done.json").exists():
+            raise NotReady(f"{job_id} is already ready to post")
+        ts = _read(root / "tick_state.json")
+        runs = _runs(ts, root)
+        if any(x.get("job") == job_id for x in runs):
+            raise Busy(f"{job_id} is already running")
+        if mine := [x for x in runs if _run_ws(x, root) == job.workspace]:
+            raise Busy(f"{job.workspace} already has a job running ({mine[0]['job']})")
+        limit = _max_runs()
+        if len(runs) >= limit:
+            raise Busy(f"already running {len(runs)} job(s) (limit {limit})")
+        if state in ("failed", "quarantined"):
+            jobs.reset(job_id, budget=True, root=root, by="console")
+        pid = runner(job_id)
+        runs.append({"job": job_id, "pid": pid, "ws": job.workspace})
+        _write(root / "tick_state.json", {**ts, "running": runs})
+        return {"ok": True, "job": job_id, "pid": pid}
+
+
+def chain_next(finished_job_id: str, *, root: Path = OUT, runner=None) -> dict | None:
+    """Auto-chain queue: right after a job finishes prepublic, prune it from tick_state.json['running'] and
+    immediately start the next queued job on the same channel when auto_chain is enabled and concurrency limits allow."""
+    runner = runner or (lambda jid: spawn(jid, root=root))
+    with _lock(root):
+        job = jobs.load(finished_job_id, root=root)
+        ts = _read(root / "tick_state.json")
+        runs = [x for x in _runs(ts, root) if x.get("job") != finished_job_id]
+        try:
+            ws = load(job.workspace, need=())
+            fac_paused = settings.load().get("paused", False)
+        except ValueError:
+            _write(root / "tick_state.json", {**ts, "running": runs})
+            return None
+        sc = ws.get("schedule") or {}
+        if fac_paused or sc.get("paused") or not sc.get("auto_chain", False):
+            _write(root / "tick_state.json", {**ts, "running": runs})
+            return None
+        if any(_run_ws(x, root) == job.workspace for x in runs) or len(runs) >= _max_runs():
+            _write(root / "tick_state.json", {**ts, "running": runs})
+            return None
+        waiting = [j for j in _tick_jobs(root, job.workspace, {"queued"}) if j != finished_job_id]
+        if not waiting:
+            _write(root / "tick_state.json", {**ts, "running": runs})
+            return None
+        nxt = waiting[0]
+        pid = runner(nxt)
+        runs.append({"job": nxt, "pid": pid, "ws": job.workspace})
+        _write(root / "tick_state.json", {**ts, "running": runs})
+        return {"job": nxt, "pid": pid}
+
+
+def _auto_watch(ws: dict, root: Path, report: dict) -> None:
+    """Auto-attach keyless Twitch & YouTube Live watchers for favorite streamers currently live on the configured game.
+
+    Deduplicates by streamer name (preferring Twitch first when multistreaming) and probes
+    https://www.youtube.com/@<handle>/live directly for remaining streamers so YouTube detection
+    does not depend on search rankings or daily stream titles.
+    """
+    clip_cfg = ws.get("clip") or {}
+    if (ws.get("format") or {}).get("pipeline") != "clip":
+        return
+
+    def _norm(val: str) -> str:
+        return "".join(ch for ch in str(val or "").lower().lstrip("@") if ch.isalnum())
+
+    raw_list = [str(x).strip().lstrip("@") for x in (clip_cfg.get("auto_watch_streamers") or []) if str(x).strip()]
+    streamers = {_norm(x): x for x in raw_list if _norm(x)}
+    if not streamers:
+        return
+    try:
+        from .clip.live import LIVE_STATUS_FILE, twitch_login
+        from .clip.radar import twitch_top_streams, youtube_channel_live
+        from .console import act as console_act
+    except Exception:
+        return
+
+    max_ready = int(clip_cfg.get("auto_watch_max_ready", 10))
+    if max_ready > 0 and len(_finished(root, ws["name"])) >= max_ready:
+        return
+
+    def _norm_url(u: str) -> str:
+        return str(u or "").strip().lower().replace("://www.", "://").rstrip("/")
+
+    active_urls: set[str] = set()
+    active_streamers: set[str] = set()
+    active_count = 0
+    now_ts = time.time()
+    live_path = root / LIVE_STATUS_FILE
+    if live_path.is_file():
+        try:
+            cur = json.loads(live_path.read_text(encoding="utf-8"))
+            if isinstance(cur, dict):
+                for entry in cur.values():
+                    if not isinstance(entry, dict):
+                        continue
+                    if entry.get("stage") not in ("starting", "watching"):
+                        continue
+                    pid_alive = bool(entry.get("pid") and psutil.pid_exists(int(entry["pid"])))
+                    fresh = False
+                    if upd := entry.get("updated_at"):
+                        try:
+                            fresh = (now_ts - datetime.fromisoformat(str(upd).replace("Z", "+00:00")).timestamp()) < 600
+                        except ValueError:
+                            pass
+                    if not (pid_alive or fresh):
+                        continue
+                    active_count += 1
+                    u = _norm_url(str(entry.get("url") or ""))
+                    if u:
+                        active_urls.add(u)
+                        if tl := twitch_login(u):
+                            active_streamers.add(_norm(tl))
+                        for norm_key in streamers:
+                            if norm_key in _norm(u) or norm_key in _norm(str(entry.get("detail") or "")):
+                                active_streamers.add(norm_key)
+        except (OSError, ValueError):
+            pass
+
+    max_watchers = int(clip_cfg.get("max_live_watchers", 2))
+    if max_watchers > 0 and active_count >= max_watchers:
+        return
+
+    query = str(clip_cfg.get("auto_watch_query") or "").strip()
+    raw_kw = clip_cfg.get("auto_watch_keywords")
+    if isinstance(raw_kw, list) and raw_kw:
+        yt_keywords = tuple(str(x).strip().lower() for x in raw_kw if str(x).strip())
+    elif query:
+        q_low = query.lower()
+        yt_keywords = tuple(w for w in q_low.split() if len(w) >= 3) or (q_low,)
+    else:
+        yt_keywords = ()
+
+    started = []
+
+    # 1. Twitch first (1 fast GraphQL call; Twitch IRC is lighter and faster than YT live_chat)
+    if query:
+        try:
+            for st in twitch_top_streams(game=query, limit=30):
+                names = {_norm(st.get("channel") or ""), _norm(st.get("name") or "")}
+                matched = names & set(streamers)
+                url = str(st.get("url") or "").strip()
+                if not matched or not url:
+                    continue
+                if (max_watchers > 0 and active_count >= max_watchers) or (matched & active_streamers) or _norm_url(url) in active_urls:
+                    active_streamers.update(matched)
+                    continue
+                try:
+                    res = console_act.start_live_watch(root, ws["name"], url, minutes=120.0)
+                    active_urls.add(_norm_url(url))
+                    active_streamers.update(matched)
+                    active_count += 1
+                    started.append({"channel": st.get("channel") or st.get("name"), "platform": "Twitch", "watch_id": res["watch_id"], "pid": res["pid"]})
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # 2. Direct YouTube /@<handle>/live fallback for any remaining watchlist streamers
+    for norm_key, raw_handle in streamers.items():
+        if norm_key in active_streamers or (max_watchers > 0 and active_count >= max_watchers):
+            continue
+        st = youtube_channel_live(raw_handle)
+        if not st:
+            continue
+        url = str(st.get("url") or "").strip()
+        if not url or _norm_url(url) in active_urls:
+            continue
+        blob = " ".join([
+            str(st.get("title") or ""),
+            str(st.get("description") or ""),
+            " ".join(str(t) for t in (st.get("tags") or [])),
+        ]).lower()
+        if yt_keywords and not any(kw in blob for kw in yt_keywords):
+            continue
+        try:
+            res = console_act.start_live_watch(root, ws["name"], url, minutes=120.0)
+            active_urls.add(_norm_url(url))
+            active_streamers.add(norm_key)
+            active_count += 1
+            started.append({"channel": st.get("channel") or raw_handle, "platform": "YouTube", "watch_id": res["watch_id"], "pid": res["pid"]})
+        except Exception:
+            continue
+
+    if started:
+        report["auto_watch"] = started
 
 
 def stop_run(job_id: str, *, root: Path = OUT) -> bool:

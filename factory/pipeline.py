@@ -14,6 +14,7 @@ from .jobs import Job, Stage, run
 from .jobs import load as load_job
 from .publish import upload_private
 from . import lessons, library
+from .clip.pipeline import clip_cut
 from .prepublic import prepublic
 from .stages.fetch_sources import fetch_sources
 from .stages.metadata import metadata
@@ -84,7 +85,13 @@ STORY_STAGES: list[Stage] = [
     ("metadata", metadata, "creative"),
     ("review", _review, "creative"), ("prepublic", prepublic, "deterministic"), ("publish", _publish, "deterministic"),
 ]
-PIPELINES = {"explainer": STAGES, "story": STORY_STAGES}
+CLIP_STAGES: list[Stage] = [
+    ("clip_cut", clip_cut, "deterministic"),
+    ("metadata", metadata, "creative"),
+    ("prepublic", prepublic, "deterministic"),
+    ("publish", _publish, "deterministic"),
+]
+PIPELINES = {"explainer": STAGES, "story": STORY_STAGES, "clip": CLIP_STAGES}
 
 
 def run_job(job_id: str, until: str | None = None) -> str:
@@ -95,4 +102,11 @@ def run_job(job_id: str, until: str | None = None) -> str:
     stages = stages_all if until is None else stages_all[: names.index(until) + 1]
     if (load_job(job_id).dir / lessons.PENDING).exists():  # a retry the tick started: the lesson comes first (9 Nov)
         stages = [("lessons", lessons.stage, "creative"), *stages]
-    return run(job_id, stages)
+    state = run(job_id, stages)
+    if until == "prepublic" and state == "done":
+        try:
+            from . import scheduler
+            scheduler.chain_next(job_id, root=load_job(job_id).root)
+        except Exception:
+            pass
+    return state

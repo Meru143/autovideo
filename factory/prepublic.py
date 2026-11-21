@@ -44,8 +44,46 @@ def page_text(project: Path) -> str:
     return "\n".join(parts)
 
 
+NSFW_RE = re.compile(
+    r"\b(boobs?|titt(?:y|ies)|nipples?|naked|nude|nudity|topless|strip\s*club|nsfw|porn|hentai|bricked\s*up)\b",
+    re.I,
+)
+
+
+def _clip_text(job_dir: Path) -> str:
+    parts: list[str] = []
+    if (n := job_dir / "narration.txt").is_file():
+        parts.append(n.read_text(encoding="utf-8", errors="replace"))
+    if (m := job_dir / "metadata.json").is_file():
+        try:
+            meta = json.loads(m.read_text(encoding="utf-8"))
+            parts.extend(str(meta.get(k) or "") for k in ("title", "description", "hook"))
+        except ValueError:
+            pass
+    if (cs := job_dir / "clip_spec.json").is_file():
+        try:
+            spec = json.loads(cs.read_text(encoding="utf-8"))
+            parts.extend(str(spec.get(k) or "") for k in ("title", "hook", "reason"))
+            for cap in spec.get("captions") or []:
+                if isinstance(cap, dict) and cap.get("text"):
+                    parts.append(str(cap["text"]))
+        except ValueError:
+            pass
+    return "\n".join(parts)
+
+
+def nsfw_flags(job: Job) -> list[str]:
+    """Flag high-risk nudity/NSFW terms in clip text unless explicitly overridden by operator."""
+    if not (job.dir / "clip_spec.json").is_file() or (job.dir / "nsfw_override.json").is_file():
+        return []
+    return sorted({m.group(0).lower() for m in NSFW_RE.finditer(_clip_text(job.dir))})
+
+
 def offlimits(job: Job, ws: dict) -> list[str]:
-    return blocked(page_text(job.dir / "project"), ws["blocked_words"] + ws.get("canon_blocklist", []))
+    text = page_text(job.dir / "project")
+    if (job.dir / "clip_spec.json").is_file():
+        text = text + "\n" + _clip_text(job.dir)
+    return blocked(text, ws["blocked_words"] + ws.get("canon_blocklist", []))
 
 
 def _grams(text: str) -> set[tuple[str, ...]]:
@@ -83,9 +121,12 @@ def similar(job: Job, ws: dict, root: Path) -> list[dict]:
 
 def prepublic(job: Job) -> dict:
     ws = load(job.workspace)
-    result = {"words": offlimits(job, ws), "similar": similar(job, ws, job.root)}
-    result["ok"] = not result["words"] and not result["similar"]
+    result = {"words": offlimits(job, ws), "similar": similar(job, ws, job.root), "nsfw": nsfw_flags(job)}
+    result["ok"] = not result["words"] and not result["similar"] and not result["nsfw"]
     (job.dir / "prepublic.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     if not result["ok"]:
-        raise Quarantined(f"prepublic refused: off-limits words {result['words']}; near-duplicates {result['similar']}")
+        raise Quarantined(
+            f"prepublic refused: off-limits words {result['words']}; "
+            f"nsfw flags {result['nsfw']}; near-duplicates {result['similar']}"
+        )
     return result

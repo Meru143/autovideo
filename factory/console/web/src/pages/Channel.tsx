@@ -1,7 +1,7 @@
 import * as Switch from "@radix-ui/react-switch";
 import { FileText, Film, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { api, errText, type ChannelDetail, type ChannelSummary, type SettingsChange } from "../api";
+import { api, errText, type ChannelDetail, type ChannelSummary, type RadarResult, type SettingsChange } from "../api";
 import { Button } from "../components/Button";
 import { ChannelChip } from "../components/ChannelChip";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -112,6 +112,7 @@ function Header({ c, save, saving }: { c: ChannelDetail; save: Save; saving: boo
         <ChannelChip channel={c} />
       </h1>
       <Toggle label="Paused" on={c.paused} saving={saving} flip={(paused) => void save({ paused })} />
+      <Toggle label="Auto-chain" on={Boolean(c.auto_chain)} saving={saving} flip={(auto_chain) => void save({ auto_chain })} />
       <div className="flex items-center gap-3 text-sm">
         <label htmlFor={`${id}-slots`} className="text-secondary">Daily slot</label>
         <input {...edits("slots", commitSlot)} value={slot} onChange={(e) => setSlot(e.target.value)} className={`${INPUT} w-28`} />
@@ -137,6 +138,216 @@ function Header({ c, save, saving }: { c: ChannelDetail; save: Save; saving: boo
         new videos a day
       </div>
     </header>
+  );
+}
+
+function IngestVod({ channel, onQueued }: { channel: string; onQueued: () => void }) {
+  const [url, setUrl] = useState("");
+  const [numClips, setNumClips] = useState(5);
+  const [layout, setLayout] = useState<"auto" | "fill" | "fit">("auto");
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    const clean = url.trim();
+    if (!clean) return;
+    setBusy(true);
+    try {
+      const res = await api.ingestVod(channel, { url: clean, num_clips: numClips, layout });
+      toast({ title: "Ingest started", text: res.ingest_id ? "Running in background — track live progress on Home." : `Queued ${res.queued.length} clip job(s)`, lamp: "ready" });
+      setUrl("");
+      onQueued();
+    } catch (e) {
+      toast({ title: "Ingest failed", text: errText(e), lamp: "attention" });
+    }
+    setBusy(false);
+  };
+
+  return (
+    <section aria-labelledby="ingest-h" className={CARD}>
+      <h2 id="ingest-h" className="border-b border-line px-4 py-3 text-base font-medium">Ingest VOD or stream</h2>
+      <div className="flex flex-col gap-3 p-4">
+        <input type="text" value={url} placeholder="Twitch VOD URL, YouTube link, or local path…"
+          onChange={(e) => setUrl(e.target.value)} className={`${INPUT} font-sans placeholder:text-secondary`} />
+        <div className="flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-1.5 text-secondary">
+            Clips
+            <input type="number" min={1} max={15} value={numClips}
+              onChange={(e) => setNumClips(Number(e.target.value))} className={`${INPUT} w-14`} />
+          </label>
+          <select value={layout} onChange={(e) => setLayout(e.target.value as "auto" | "fill" | "fit")} className={`${INPUT} flex-1`}>
+            <option value="auto">auto (Smart framing)</option>
+            <option value="fill">fill (Full frame)</option>
+            <option value="fit">fit (Blurred bg)</option>
+          </select>
+        </div>
+        <Button primary busy={busy} disabled={!url.trim()} onClick={() => void run()}>
+          {busy ? "Ingesting…" : "Scan & queue clips"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+
+function RadarAndLive({ channel, autoWatch, defaultQuery, save, saving, onStarted }: { channel: string; autoWatch: string[]; defaultQuery?: string; save: Save; saving: boolean; onStarted: () => void }) {
+  const [query, setQuery] = useState(defaultQuery ?? "");
+  const [minutes, setMinutes] = useState(60);
+  const [liveUrl, setLiveUrl] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [watchingUrl, setWatchingUrl] = useState<string | null>(null);
+  const [ingestingUrl, setIngestingUrl] = useState<string | null>(null);
+  const [radar, setRadar] = useState<RadarResult | null>(null);
+  const [watchList, setWatchList, resetWatchList] = useDraft(autoWatch.join(", "), autoWatch.join(", "));
+  const commitWatchList = async () => {
+    const list = watchList.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+    if (list.join(", ") === autoWatch.join(", ")) return resetWatchList();
+    if (!(await save({ auto_watch_streamers: list }))) resetWatchList();
+  };
+
+  const scan = async () => {
+    const q = query.trim();
+    if (!q) return;
+    setScanning(true);
+    try {
+      const res = await api.clipRadar({ query: q, mode: "all", limit: 8, hours: 24 });
+      setRadar(res);
+    } catch (e) {
+      toast({ title: "Radar scan failed", text: errText(e), lamp: "attention" });
+    }
+    setScanning(false);
+  };
+
+  const watch = async (targetUrl: string) => {
+    const clean = targetUrl.trim();
+    if (!clean) return;
+    setWatchingUrl(clean);
+    try {
+      await api.startLiveWatch(channel, { url: clean, minutes });
+      toast({ title: "Live watcher started", text: "Recording in background — track spikes & stop on Home.", lamp: "ready" });
+      if (clean === liveUrl.trim()) setLiveUrl("");
+      onStarted();
+    } catch (e) {
+      toast({ title: "Watch Live failed", text: errText(e), lamp: "attention" });
+    }
+    setWatchingUrl(null);
+  };
+
+  const quickIngest = async (targetUrl: string) => {
+    setIngestingUrl(targetUrl);
+    try {
+      await api.ingestVod(channel, { url: targetUrl });
+      toast({ title: "Ingest started", text: "Running in background — track live progress on Home.", lamp: "ready" });
+      onStarted();
+    } catch (e) {
+      toast({ title: "Ingest failed", text: errText(e), lamp: "attention" });
+    }
+    setIngestingUrl(null);
+  };
+
+  return (
+    <section aria-labelledby="radar-h" className={CARD}>
+      <h2 id="radar-h" className="border-b border-line px-4 py-3 text-base font-medium">Radar &amp; Watch Live</h2>
+      <div className="flex flex-col gap-3 p-4">
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={query}
+            placeholder="Game or topic…"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !scanning && void scan()}
+            className={`${INPUT} min-w-0 flex-1 font-sans placeholder:text-secondary`}
+          />
+          <Button primary busy={scanning} disabled={!query.trim()} onClick={() => void scan()}>
+            {scanning ? "Scanning…" : "Scan"}
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-2 border-t border-line pt-3">
+          <input
+            type="text"
+            value={liveUrl}
+            placeholder="Live Twitch or YouTube URL…"
+            onChange={(e) => setLiveUrl(e.target.value)}
+            className={`${INPUT} min-w-0 flex-1 font-sans placeholder:text-secondary`}
+          />
+          <input
+            type="number"
+            min={5}
+            max={720}
+            value={minutes}
+            aria-label="Watch minutes"
+            title="Watch duration (minutes)"
+            onChange={(e) => setMinutes(Number(e.target.value))}
+            className={`${INPUT} w-14`}
+          />
+          <Button busy={watchingUrl === liveUrl.trim() && !!liveUrl.trim()} disabled={!liveUrl.trim()} onClick={() => void watch(liveUrl)}>
+            Watch
+          </Button>
+        </div>
+
+        <div className="flex flex-col gap-1 border-t border-line pt-3">
+          <label className="text-xs text-secondary">Auto-watch Twitch streamers (comma-separated, checked each tick)</label>
+          <input
+            value={watchList}
+            readOnly={saving}
+            placeholder="streamer1, streamer2"
+            onChange={(e) => setWatchList(e.target.value)}
+            onBlur={() => void (saving || commitWatchList())}
+            onKeyDown={(e) => void (e.key === "Enter" && !saving && commitWatchList())}
+            className={INPUT}
+          />
+        </div>
+
+        {radar && (
+          <div className="flex flex-col gap-3 border-t border-line pt-3 text-xs">
+            <div>
+              <p className="mb-1.5 font-medium text-secondary">Live streams ({radar.streams?.length ?? 0})</p>
+              {radar.streams?.length ? (
+                <ul className="flex flex-col gap-2">
+                  {radar.streams.slice(0, 6).map((st) => (
+                    <li key={st.url} className="flex items-center justify-between gap-2 rounded-md border border-line bg-page px-2.5 py-1.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-primary">
+                          <span className="font-mono text-secondary">[{st.platform}]</span> {st.channel}
+                        </p>
+                        <p className="truncate text-secondary">
+                          <span className="font-mono">{count.format(st.viewers)}</span> viewers{st.live_for ? ` · ${st.live_for}` : ""} · {st.title}
+                        </p>
+                      </div>
+                      <Button busy={watchingUrl === st.url} onClick={() => void watch(st.url)}>Watch</Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-secondary">No live streams found.</p>
+              )}
+            </div>
+
+            <div>
+              <p className="mb-1.5 font-medium text-secondary">Trending videos ({radar.trends?.length ?? 0})</p>
+              {radar.trends?.length ? (
+                <ul className="flex flex-col gap-2">
+                  {radar.trends.slice(0, 6).map((tr) => (
+                    <li key={tr.url} className="flex items-center justify-between gap-2 rounded-md border border-line bg-page px-2.5 py-1.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-primary">{tr.title}</p>
+                        <p className="truncate text-secondary">
+                          <span className="font-mono">{count.format(Math.round(tr.views_per_hour))}/h</span> · {tr.age_h}h · {tr.channel}
+                          {tr.has_heatmap ? " · heatmap" : ""}
+                        </p>
+                      </div>
+                      <Button busy={ingestingUrl === tr.url} onClick={() => void quickIngest(tr.url)}>Ingest</Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-secondary">No trending videos in last 24h.</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -393,6 +604,8 @@ export function Channel({ name, summary }: { name: string; summary?: ChannelSumm
           )}
         </div>
         <div className="flex flex-col gap-4 self-start">
+          {c.format === "clip" && <IngestVod channel={name} onQueued={refresh} />}
+          {c.format === "clip" && <RadarAndLive channel={name} autoWatch={c.auto_watch_streamers ?? []} defaultQuery={c.auto_watch_query} save={save} saving={saving} onStarted={refresh} />}
           <Topics c={c} save={save} saving={saving} />
           <Recent c={c} />
         </div>

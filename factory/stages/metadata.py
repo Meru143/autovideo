@@ -14,7 +14,7 @@ from ..workspace import format_of, instagram_of, load, blocked
 SCHEMA = {"type": "object", "required": ["title", "description", "hashtags", "instagram_caption"], "properties": {
     "title": {"type": "string"}, "description": {"type": "string"},
     "hashtags": {"type": "array", "items": {"type": "string"}}, "tags": {"type": "array", "items": {"type": "string"}},
-    "instagram_caption": {"type": "string"}}}
+    "instagram_caption": {"type": "string"}, "pinned_comment": {"type": "string"}}}
 MAX_TITLE, MAX_CAPTION = 70, 2200  # Instagram's caption limit
 PROFANITY = re.compile(r"\b(?:fuck\w*|shit\w*|bitch\w*|damn|crap|wtf|asshole\w*|bastard\w*)\b", re.I)
 ID_LIKE = re.compile(r"^(?:[\d\W_]+|[0-9a-f]{8,}|untitled.*|video\s*\d*|.*\.(?:mp4|mov|txt))$", re.I)
@@ -64,6 +64,14 @@ def check_metadata(m: dict, ws: dict) -> list[str]:
         if hit := rx.search(body):
             failures.append(f"instagram_caption {name}: {hit.group(0)!r}")
     failures += [f"instagram_caption: blocked word {w!r}" for w in blocked(body, ws["blocked_words"])]
+    pin = str(m.get("pinned_comment") or "").strip()
+    if pin:
+        if len(pin) > 200:
+            failures.append(f"pinned_comment is {len(pin)} characters; keep it under 200")
+        for name, rx in (("has a link", URL), ("has profanity", PROFANITY)):
+            if hit := rx.search(pin):
+                failures.append(f"pinned_comment {name}: {hit.group(0)!r}")
+        failures += [f"pinned_comment: blocked word {w!r}" for w in blocked(pin, ws["blocked_words"])]
     return failures
 
 
@@ -97,7 +105,20 @@ def metadata(job: Job, *, claude_bin: list[str] | None = None, sensor: Path = SE
                               "one or two plain sentences, then "
                               f"3-{instagram_of(ws)['hashtags_max']} hashtags. No link, URL or \"link in bio\", and "
                               "no #shorts; code adds the required lines.",
+                              "Also write pinned_comment: one short (under 100 chars), punchy, opinion-splitting "
+                              "first comment tied specifically to the clip moment so the creator can copy-paste and "
+                              "pin it right after posting (no hashtags, no links, no generic \"Tell us in the comments\").",
                               "## Narration", script["narration"], "## Hooks", *script.get("hooks", []),
+                              *(
+                                  [
+                                      "## Featured Streamer / Creator",
+                                      f"{script.get('creator', '')} ({script.get('creator_handle', '')}) — "
+                                      "feature their name in the title/tags where natural and credit their @handle "
+                                      "(no URLs/domains) in the description.",
+                                  ]
+                                  if script.get("creator")
+                                  else []
+                              ),
                               f"## Blocked words\n{', '.join(ws['blocked_words'])}"]
                              + (["## Your previous draft failed these checks. Fix every one:",
                                  *(f"- {f}" for f in feedback)] if feedback else []))
